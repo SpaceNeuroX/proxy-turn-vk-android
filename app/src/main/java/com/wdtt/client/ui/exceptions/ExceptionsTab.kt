@@ -527,7 +527,7 @@ fun ExceptionsTab() {
                                     onClick = {
                                         if (isWhitelist) {
                                             scope.launch {
-                                                settingsStore.saveExceptionsMode("", false)
+                                                settingsStore.saveExceptionsMode(false)
                                                 delay(300)
                                                 TunnelManager.reloadWireGuard()
                                             }
@@ -547,7 +547,7 @@ fun ExceptionsTab() {
                                     onClick = {
                                         if (!isWhitelist) {
                                             scope.launch {
-                                                settingsStore.saveExceptionsMode("", true)
+                                                settingsStore.saveExceptionsMode(true)
                                                 delay(300)
                                                 TunnelManager.reloadWireGuard()
                                             }

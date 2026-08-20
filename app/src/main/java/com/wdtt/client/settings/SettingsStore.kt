@@ -752,6 +752,13 @@ class SettingsStore(context: Context) {
         }
     }
 
+    suspend fun saveExceptionsMode(isWhitelist: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[IS_WHITELIST] = isWhitelist
+            prefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] = true
+        }
+    }
+
     suspend fun migrateLegacyWhitelistMode() {
         val currentPrefs = dataStore.data.first()
         if (currentPrefs[SPLIT_TUNNEL_WHITELIST_MIGRATED] == true) return
