@@ -561,14 +561,6 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65535
 UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectClock=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-RestrictSUIDSGID=true
-LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -603,6 +595,7 @@ start_wdtt() {
 
     if [ "$status" = "active" ]; then
         echo "✅ Деплой успешно завершён!"
+        echo "WDTT_DEPLOY_OK"
         echo "   NAT:  MASQUERADE (стандартный)"
         echo "   DTLS: порт ${DTLS_PORT}"
         echo "   WG:   порт ${WG_PORT}"
@@ -611,6 +604,7 @@ start_wdtt() {
         echo "⚠️ Сервис wdtt не запустился. Статус: $status"
         echo "   Последние логи:"
         journalctl -u wdtt -n 7 --no-pager 2>/dev/null | sed 's/^/   >> /'
+        echo "WDTT_DEPLOY_SERVICE_FAILED"
     fi
 
     echo "   Логи:   journalctl -u wdtt -f"

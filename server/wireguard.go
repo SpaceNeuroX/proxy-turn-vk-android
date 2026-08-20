@@ -66,7 +66,17 @@ func startUserspaceWG(keys *wgKeys, wgPort int) (*device.Device, error) {
 
 	tunDev, err := tun.CreateTUN(wgIfaceName, wgMTU)
 	if err != nil {
-		return nil, fmt.Errorf("CreateTUN: %w", err)
+		optimizedErr := err
+		tunFile, fallbackErr := createBasicTUNFile(wgIfaceName, true)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("CreateTUN: %v; fallback: %w", optimizedErr, fallbackErr)
+		}
+		tunDev, fallbackErr = tun.CreateTUNFromFile(tunFile, wgMTU)
+		if fallbackErr != nil {
+			tunFile.Close()
+			return nil, fmt.Errorf("CreateTUN: %v; fallback init: %w", optimizedErr, fallbackErr)
+		}
+		log.Printf("[WG] Совместимый TUN без VNET_HDR: %v", optimizedErr)
 	}
 
 	ifaceName, err := tunDev.Name()
