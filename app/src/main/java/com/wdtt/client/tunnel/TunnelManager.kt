@@ -1330,6 +1330,8 @@ object TunnelManager {
         reconnectAll(reason, force = force, preserveVpn = true)
     }
 
+    fun isRawTunModeActive(): Boolean = currentParams?.isRawTunMode == true
+
     fun hasRecentTransportActivity(maxAgeMs: Long = 25_000L): Boolean {
         val now = System.currentTimeMillis()
         return running.value &&
