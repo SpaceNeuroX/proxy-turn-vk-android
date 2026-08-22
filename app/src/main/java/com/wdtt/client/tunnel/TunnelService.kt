@@ -294,6 +294,7 @@ class TunnelService : Service() {
                 val wasEmpty = activeNetworks.isEmpty()
                 activeNetworks.add(network)
                 rememberNetworkFingerprint(network)
+                checkWifiStopOnTransition()
                 if (wasEmpty) {
                     if (isTunnelPaused) {
                         isTunnelPaused = false
@@ -313,6 +314,7 @@ class TunnelService : Service() {
                 super.onLost(network)
                 activeNetworks.remove(network)
                 networkFingerprints.remove(network)
+                checkWifiStopOnTransition()
                 if (activeNetworks.isEmpty() && TunnelManager.running.value && !isTunnelPaused) {
                     isTunnelPaused = true
                     recoveringFromNetworkLoss = true
@@ -330,6 +332,7 @@ class TunnelService : Service() {
                 if (network !in activeNetworks) return
                 val prev = networkFingerprints[network]
                 val next = rememberNetworkFingerprint(network)
+                checkWifiStopOnTransition()
                 if (prev != null && prev != next) {
                     noteUnderlyingNetworkChange()
                 }
@@ -338,6 +341,7 @@ class TunnelService : Service() {
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 super.onLinkPropertiesChanged(network, linkProperties)
                 if (network !in activeNetworks) return
+                checkWifiStopOnTransition()
                 noteUnderlyingNetworkChange()
             }
         }
@@ -350,7 +354,7 @@ class TunnelService : Service() {
             .build()
             
         connectivityManager?.registerNetworkCallback(request, networkCallback!!)
-        wasOnWifi = isUnderlyingWifiActive()
+        wasOnWifi = isUnderlyingWifiPresent()
     }
 
     /**
@@ -417,29 +421,23 @@ class TunnelService : Service() {
         lastUnderlyingFingerprint = fingerprint
         handleNetworkChange()
     }
-    
-    private fun handleNetworkChange() {
-        val nowOnWifi = isUnderlyingWifiActive()
-        val wifiPresent = isUnderlyingWifiPresent()
+
+    private fun checkWifiStopOnTransition() {
+        val nowOnWifi = isUnderlyingWifiPresent()
         val transitionedToWifi = nowOnWifi && !wasOnWifi
         wasOnWifi = nowOnWifi
+        if (!transitionedToWifi || !TunnelManager.running.value || isTunnelPaused) return
 
         TunnelManager.scope.launch {
-            val stopOnWifi = SettingsStore(applicationContext).stopOnWifi.first()
-            // Только переход на Wi‑Fi гасит туннель. Ручной старт уже на Wi‑Fi — ок.
-            if (stopOnWifi && transitionedToWifi && TunnelManager.running.value && !isTunnelPaused) {
-                Log.d("TunnelService", "Подключились к Wi‑Fi — отключаем туннель по настройке")
-                TunnelManager.addNetworkLog("[СЕТЬ] Wi‑Fi: туннель отключён (опция «Отключать на Wi‑Fi»)")
-                launch(Dispatchers.Main) { stopTunnel() }
-                return@launch
-            }
-            // Wi‑Fi поднимается (ещё без VALIDATED) при включённой опции — не реконнектимся,
-            // иначе «Переподключение» съедает стоп debounce'ом на validated.
-            if (stopOnWifi && !nowOnWifi && wifiPresent && TunnelManager.running.value && !isTunnelPaused) {
-                Log.d("TunnelService", "Wi‑Fi поднимается — ждём VALIDATED, без переподключения")
-                return@launch
-            }
+            if (!SettingsStore(applicationContext).stopOnWifi.first()) return@launch
+            Log.d("TunnelService", "Подключились к Wi‑Fi — отключаем туннель по настройке")
+            TunnelManager.addNetworkLog("[СЕТЬ] Wi‑Fi: туннель отключён (опция «Отключать на Wi‑Fi»)")
+            launch(Dispatchers.Main) { stopTunnel() }
+        }
+    }
 
+    private fun handleNetworkChange() {
+        TunnelManager.scope.launch {
             if (recoveringFromNetworkLoss) {
                 scheduleNetworkReturnRecovery()
             } else {
