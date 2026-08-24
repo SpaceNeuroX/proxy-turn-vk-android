@@ -426,7 +426,7 @@ class TunnelService : Service() {
         val nowOnWifi = isUnderlyingWifiPresent()
         val transitionedToWifi = nowOnWifi && !wasOnWifi
         wasOnWifi = nowOnWifi
-        if (!transitionedToWifi || !TunnelManager.running.value || isTunnelPaused) return
+        if (!transitionedToWifi || !TunnelManager.running.value) return
 
         TunnelManager.scope.launch {
             if (!SettingsStore(applicationContext).stopOnWifi.first()) return@launch
