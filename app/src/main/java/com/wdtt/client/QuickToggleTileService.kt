@@ -25,28 +25,39 @@ class QuickToggleTileService : TileService() {
     override fun onClick() {
         super.onClick()
         runCatching {
-            if (TunnelManager.running.value) {
+            if (TunnelManager.running.value || TunnelManager.isConnecting.value) {
                 TunnelControl.stop(applicationContext)
                 updateTile(false)
                 return
             }
 
+            val needsVpnPermission = runCatching {
+                VpnService.prepare(this@QuickToggleTileService) != null
+            }.getOrDefault(true)
+            if (!needsVpnPermission) {
+                TunnelControl.startFromSavedSettings(applicationContext)
+                updateTileConnecting()
+                return
+            }
+
             TunnelManager.scope.launch {
-                val mode = SettingsStore(applicationContext).connectionMode.first()
-                val needsVpn = mode != SettingsStore.CONNECTION_MODE_SOCKS &&
-                    VpnService.prepare(this@QuickToggleTileService) != null
-                withContext(Dispatchers.Main) {
-                    if (needsVpn) {
-                        Toast.makeText(
-                            this@QuickToggleTileService,
-                            "Разрешите qWDTT создать VPN-подключение",
-                            Toast.LENGTH_LONG,
-                        ).show()
-                        openVpnPermissionActivity()
-                    } else {
-                        TunnelControl.startFromSavedSettings(applicationContext)
-                        updateTile(true)
+                try {
+                    val mode = SettingsStore(applicationContext).connectionMode.first()
+                    withContext(Dispatchers.Main) {
+                        if (mode == SettingsStore.CONNECTION_MODE_SOCKS) {
+                            TunnelControl.startFromSavedSettings(applicationContext)
+                            updateTileConnecting()
+                        } else {
+                            Toast.makeText(
+                                this@QuickToggleTileService,
+                                "Разрешите qWDTT создать VPN-подключение",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            openVpnPermissionActivity()
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "QS tile start failed", e)
                 }
             }
         }.onFailure { e ->
@@ -55,7 +66,21 @@ class QuickToggleTileService : TileService() {
     }
 
     private fun updateTileState() {
-        updateTile(TunnelManager.running.value)
+        if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) {
+            updateTileConnecting()
+        } else {
+            updateTile(TunnelManager.running.value)
+        }
+    }
+
+    private fun updateTileConnecting() {
+        val tile = qsTile ?: return
+        tile.state = Tile.STATE_UNAVAILABLE
+        tile.label = "qWDTT"
+        if (Build.VERSION.SDK_INT >= 29) {
+            tile.subtitle = "Подключение…"
+        }
+        tile.updateTile()
     }
 
     private fun updateTile(running: Boolean) {

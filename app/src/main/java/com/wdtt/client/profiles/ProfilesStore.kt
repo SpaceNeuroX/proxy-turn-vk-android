@@ -203,7 +203,7 @@ class ProfilesStore(context: Context) {
         try {
             val parsed = SubscriptionImport.fetch(trimmedUrl).getOrThrow()
             val groupName = parsed.subscriptionName?.trim()?.takeIf { it.isNotEmpty() }
-                ?: return@withContext Result.failure(IllegalArgumentException("В JSON нужно поле subscriptionName"))
+                ?: return@withContext Result.failure(IllegalArgumentException("В подписке не указано название"))
             importProfilesToGroup(groupName, parsed.profiles, fromSubscription = true)
             val groupId = findGroupByName(groupName)?.id ?: ""
             val id = UUID.randomUUID().toString()

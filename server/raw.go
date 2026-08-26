@@ -137,7 +137,7 @@ type rawRouter struct {
 // Read/Write ожидают virtio_net_hdr перед каждым пакетом. Нам нужны просто
 // сырые IP-пакеты без какого-либо заголовка, поэтому TUN создаём сами с
 // IFF_TUN|IFF_NO_PI и без IFF_VNET_HDR.
-func createRawTUNFile(name string) (*os.File, error) {
+func createBasicTUNFile(name string, nonblock bool) (*os.File, error) {
 	nfd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open /dev/net/tun: %w", err)
@@ -154,12 +154,16 @@ func createRawTUNFile(name string) (*os.File, error) {
 		return nil, fmt.Errorf("TUNSETIFF: %w", err)
 	}
 
-	if err := unix.SetNonblock(nfd, false); err != nil {
+	if err := unix.SetNonblock(nfd, nonblock); err != nil {
 		unix.Close(nfd)
 		return nil, fmt.Errorf("SetNonblock: %w", err)
 	}
 
 	return os.NewFile(uintptr(nfd), "/dev/net/tun"), nil
+}
+
+func createRawTUNFile(name string) (*os.File, error) {
+	return createBasicTUNFile(name, false)
 }
 
 func newRawRouter() (*rawRouter, error) {

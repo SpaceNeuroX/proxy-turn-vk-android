@@ -275,15 +275,21 @@ fun ExceptionsTab() {
         isLoading = false
     }
 
-    val filteredApps by remember {
-        derivedStateOf {
-            val baseList = if (showSystemApps) appsList else appsList.filter { !it.isSystem }
-            if (searchQuery.isBlank()) baseList
-            else baseList.filter {
+    val filteredApps = remember(appsList, showSystemApps, searchQuery, selectedPackages) {
+        val baseList = if (showSystemApps) appsList else appsList.filter { !it.isSystem }
+        val matchingApps = if (searchQuery.isBlank()) {
+            baseList
+        } else {
+            baseList.filter {
                 it.name.contains(searchQuery, ignoreCase = true) ||
                     it.packageName.contains(searchQuery, ignoreCase = true)
             }
         }
+        matchingApps.sortedWith(
+            compareByDescending<AppItem> { it.packageName in selectedPackages }
+                .thenBy { it.name.lowercase(Locale.getDefault()) }
+                .thenBy { it.packageName }
+        )
     }
 
     Column(
@@ -521,7 +527,7 @@ fun ExceptionsTab() {
                                     onClick = {
                                         if (isWhitelist) {
                                             scope.launch {
-                                                settingsStore.saveExceptionsMode("", false)
+                                                settingsStore.saveExceptionsMode(false)
                                                 delay(300)
                                                 TunnelManager.reloadWireGuard()
                                             }
@@ -541,7 +547,7 @@ fun ExceptionsTab() {
                                     onClick = {
                                         if (!isWhitelist) {
                                             scope.launch {
-                                                settingsStore.saveExceptionsMode("", true)
+                                                settingsStore.saveExceptionsMode(true)
                                                 delay(300)
                                                 TunnelManager.reloadWireGuard()
                                             }

@@ -1384,17 +1384,25 @@ private suspend fun performDeploy(
             ?.getOrNull(1)
             .orEmpty()
 
-        if ((output.contains("✅") || output.contains("Деплой успешно") || output.contains("active")) && certPin.isNotBlank()) {
+        if (output.contains("WDTT_DEPLOY_OK") && certPin.isNotBlank()) {
             DeployManager.stopDeploy("success")
             TunnelManager.addDeploySuccessLog("Деплой успешно завершен. Сервис активен.")
             return@withContext DeployResult(true, adminApiToken, certPin)
+        } else if (output.contains("CreateTUN") && output.contains("operation not permitted")) {
+            DeployManager.writeError("Server cannot create TUN: operation not permitted")
+            DeployManager.stopDeploy("Сервер не смог создать TUN-интерфейс")
+            return@withContext DeployResult(false)
         } else if (output.contains("error:")) {
             DeployManager.writeError("Deploy script output contains error")
             DeployManager.stopDeploy("Ошибка выполнения скрипта (см. errors.log)")
             return@withContext DeployResult(false)
-        } else {
+        } else if (certPin.isBlank()) {
             DeployManager.writeError("Admin TLS pin not found in deploy output")
             DeployManager.stopDeploy("Ошибка настройки защищённой админ-панели")
+            return@withContext DeployResult(false)
+        } else {
+            DeployManager.writeError("WDTT service did not become active")
+            DeployManager.stopDeploy("Сервис WDTT не запустился")
             return@withContext DeployResult(false)
         }
 

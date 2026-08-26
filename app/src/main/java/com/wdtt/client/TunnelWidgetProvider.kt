@@ -29,12 +29,16 @@ class TunnelWidgetProvider : AppWidgetProvider() {
             if (TunnelManager.running.value) {
                 TunnelControl.stop(context)
             } else {
+                val needsVpnPermission = runCatching { VpnService.prepare(context) != null }
+                    .getOrDefault(true)
+                if (!needsVpnPermission) {
+                    TunnelControl.startFromSavedSettings(context)
+                    return
+                }
                 TunnelManager.scope.launch {
                     val mode = SettingsStore(context.applicationContext).connectionMode.first()
-                    val needsVpn = mode != SettingsStore.CONNECTION_MODE_SOCKS &&
-                        VpnService.prepare(context) != null
                     withContext(Dispatchers.Main) {
-                        if (needsVpn) {
+                        if (mode != SettingsStore.CONNECTION_MODE_SOCKS) {
                             Toast.makeText(
                                 context.applicationContext,
                                 "Разрешите qWDTT создать VPN-подключение",

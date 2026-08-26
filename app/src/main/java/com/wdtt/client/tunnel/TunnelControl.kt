@@ -3,11 +3,6 @@ package com.wdtt.client
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 object TunnelControl {
 
@@ -18,60 +13,13 @@ object TunnelControl {
 
     fun startFromSavedSettings(context: Context) {
         val appContext = context.applicationContext
-        CoroutineScope(Dispatchers.IO).launch {
-            SettingsStore.awaitMigrations(appContext)
-            val store = SettingsStore(appContext)
-            val basePeer = store.peer.first()
-            val hashes = store.vkHashes.first()
-            val workers = store.workersPerHash.first()
-            val port = store.listenPort.first()
-            val password = store.connectionPassword.first()
-            val captchaMode = store.captchaMode.first()
-            val captchaMethod = store.captchaSolveMethod.first()
-            val vkAnonPath = SettingsStore.normalizeVkAnonPath(store.vkAnonPath.first())
-            val goDnsArg = store.resolveGoDnsArg()
-            val obfsMode = SettingsStore.normalizeObfsMode(store.obfsMode.first())
-            val connectionMode = SettingsStore.normalizeConnectionMode(store.connectionMode.first())
-            val socksPort = SettingsStore.normalizeSocksPort(store.socksPort.first())
-            val socksAuthEnabled = store.socksAuthEnabled.first()
-            val socksUsername = store.socksUsername.first()
-            val socksPassword = store.socksPassword.first()
-            val manualPortsEnabled = store.manualPortsEnabled.first()
-            val serverDtlsPort = if (manualPortsEnabled) store.serverDtlsPort.first() else 56000
-            val peerWithPort = if (basePeer.isBlank()) basePeer else PeerAddress.ensurePort(basePeer, serverDtlsPort)
-
-            if (peerWithPort.isBlank() || hashes.isBlank() || password.isBlank()) {
-                return@launch
-            }
-
-            val startIntent = Intent(appContext, TunnelService::class.java).apply {
-                action = "START_FORCED"
-                putExtra("peer", peerWithPort)
-                putExtra("vk_hashes", hashes)
-                putExtra("secondary_vk_hash", "")
-                putExtra("workers_per_hash", workers)
-                putExtra("port", port)
-                putExtra("sni", store.sni.first())
-                putExtra("connection_password", password)
-                putExtra("captcha_mode", captchaMode)
-                putExtra("captcha_solve_method", captchaMethod)
-                putExtra("vk_anon_path", vkAnonPath)
-                putExtra("go_dns_arg", goDnsArg)
-                putExtra("obfs_mode", obfsMode)
-                putExtra("connection_mode", connectionMode)
-                putExtra("socks_port", socksPort)
-                putExtra("socks_auth_enabled", socksAuthEnabled)
-                putExtra("socks_username", socksUsername)
-                putExtra("socks_password", socksPassword)
-            }
-
-            withContext(Dispatchers.Main) {
-                if (Build.VERSION.SDK_INT >= 26) {
-                    appContext.startForegroundService(startIntent)
-                } else {
-                    appContext.startService(startIntent)
-                }
-            }
+        val startIntent = Intent(appContext, TunnelService::class.java).apply {
+            action = "START_SAVED"
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            appContext.startForegroundService(startIntent)
+        } else {
+            appContext.startService(startIntent)
         }
     }
 }
