@@ -77,7 +77,7 @@ fun AddSubscriptionDialog(
                     enabled = !saving
                 )
                 Text(
-                    "Название берётся из subscriptionName в JSON. Обязательны subscriptionName и profiles[].",
+                    "Вставьте ссылку — название и профили загрузятся автоматически.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
