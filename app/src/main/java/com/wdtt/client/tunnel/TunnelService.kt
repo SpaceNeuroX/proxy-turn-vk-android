@@ -72,7 +72,7 @@ class TunnelService : Service() {
         }
 
         when (intent.action) {
-            "START", "START_FORCED" -> {
+            "START", "START_FORCED", "START_SAVED" -> {
                 val notification = createNotification("Запуск...")
                 startPersistentForeground(notification)
 
@@ -153,7 +153,10 @@ class TunnelService : Service() {
                             detailedLogs = store.detailedLogs.first()
                         )
                         launch(Dispatchers.Main) {
-                            startTunnel(params, forceStart = intent.action == "START_FORCED")
+                            startTunnel(
+                                params,
+                                forceStart = intent.action == "START_FORCED" || intent.action == "START_SAVED"
+                            )
                         }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
@@ -460,7 +463,7 @@ class TunnelService : Service() {
             if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return@launch
             recoveringFromNetworkLoss = false
             wasOnWifi = isUnderlyingWifiActive()
-            performHybridNetworkRecovery("сеть появилась")
+            performNetworkRecovery("сеть появилась")
         }
     }
 
@@ -468,37 +471,20 @@ class TunnelService : Service() {
         networkRecoveryJob?.cancel()
         networkRecoveryJob = TunnelManager.scope.launch {
             if (!TunnelManager.running.value || isTunnelPaused) return@launch
-            val changedAt = System.currentTimeMillis()
-            TunnelManager.addNetworkLog("[СЕТЬ] Сеть изменилась. Даём туннелю 15 секунд на самостоятельное восстановление.")
-            delay(15_000)
+            TunnelManager.addNetworkLog("[СЕТЬ] Сеть изменилась. Ждём стабилизации и переподключаемся.")
+            delay(4_000)
             if (!TunnelManager.running.value || isTunnelPaused ||
                 System.currentTimeMillis() < wakeGraceUntilMs || !hasValidatedUnderlyingNetwork()) return@launch
-            if (TunnelManager.hasDownlinkTrafficSince(changedAt)) {
-                TunnelManager.addNetworkLog("[СЕТЬ] Туннель сам восстановил трафик на новой сети.")
-                return@launch
-            }
-            performHybridNetworkRecovery("смена сети")
+            performNetworkRecovery("смена сети")
         }
     }
 
-    private suspend fun performHybridNetworkRecovery(reason: String) {
+    private suspend fun performNetworkRecovery(reason: String) {
         if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return
         lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
-        val softRestartAt = System.currentTimeMillis()
-        updateNotification("Восстановление транспорта...")
-        TunnelManager.addNetworkLog("[СЕТЬ] Мягко перезапускаем транспорт, не закрывая VPN-интерфейс.")
-        TunnelManager.restartTransport(reason, force = true)
-        delay(30_000)
-        if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return
-        if (TunnelManager.hasHealthyRestartSince(softRestartAt)) {
-            updateNotification("Подключено")
-            TunnelManager.addNetworkLog("[СЕТЬ] Транспорт восстановился без пересоздания VPN.")
-            return
-        }
-        lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
-        updateNotification("Полное восстановление...")
-        TunnelManager.addNetworkLog("[СЕТЬ] Мягкий перезапуск не вернул связь. Полностью пересоздаём VPN и транспорт.")
-        TunnelManager.reconnectAll("$reason: резервное восстановление", force = true)
+        updateNotification("Переподключение...")
+        TunnelManager.addNetworkLog("[СЕТЬ] Пересоздаём VPN и транспорт для новой сети.")
+        TunnelManager.reconnectAll(reason, force = true)
     }
 
     private fun hasValidatedUnderlyingNetwork(): Boolean {

@@ -1,8 +1,8 @@
 package com.wdtt.client
 
-import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -13,8 +13,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 class VpnPermissionActivity : ComponentActivity() {
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
-        openMainActivityAndFinish()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            startTunnelAndFinish()
+        } else {
+            Toast.makeText(this, "VPN-подключение не разрешено", Toast.LENGTH_SHORT).show()
+            finish()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -23,18 +28,14 @@ class VpnPermissionActivity : ComponentActivity() {
 
         val permissionIntent = runCatching { VpnService.prepare(this) }.getOrNull()
         if (permissionIntent == null) {
-            openMainActivityAndFinish()
+            startTunnelAndFinish()
         } else {
             vpnPermissionLauncher.launch(permissionIntent)
         }
     }
 
-    private fun openMainActivityAndFinish() {
-        startActivity(
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            }
-        )
+    private fun startTunnelAndFinish() {
+        TunnelControl.startFromSavedSettings(applicationContext)
         finish()
     }
 }
