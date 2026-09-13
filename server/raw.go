@@ -362,16 +362,9 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 		isMainPass := password != "" && password == db.MainPassword
 		entry, isGenPass := db.Passwords[password]
 		valid := isMainPass || (isGenPass && !isPasswordExpired(entry))
-		ownerID := wrapKeyID(password)
-
 		if valid && isGenPass && entry.IsDeactivated {
 			dbMutex.Unlock()
 			clientConn.Write([]byte("DENIED:deactivated"))
-			return
-		}
-		if valid && !authorizeDeviceOwnerLocked(deviceID, password, isMainPass, entry) {
-			dbMutex.Unlock()
-			clientConn.Write([]byte("DENIED:device_mismatch"))
 			return
 		}
 		if valid && isGenPass && !entry.canConnectAndBind(deviceID) {
@@ -394,22 +387,18 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 
 		dev, exists := db.Devices[deviceID]
 		if !exists {
-			dev = &ClientDevice{DeviceID: deviceID, IP: getNextIP(), RawIP: getNextRawIP(), RawOwnerID: ownerID}
+			dev = &ClientDevice{DeviceID: deviceID, IP: getNextIP(), RawIP: getNextRawIP()}
 			setDeviceOwner(dev, password)
+			dev.RawOwnerID = wrapKeyID(password)
 			db.Devices[deviceID] = dev
 			saveDB()
 		} else {
 			changed := false
-			if dev.OwnerID == "" {
-				setDeviceOwner(dev, password)
-				changed = true
-			}
+			setDeviceOwner(dev, password)
+			dev.RawOwnerID = wrapKeyID(password)
+			changed = true
 			if dev.RawIP == "" {
 				dev.RawIP = getNextRawIP()
-				changed = true
-			}
-			if dev.RawOwnerID == "" && isGenPass {
-				dev.RawOwnerID = ownerID
 				changed = true
 			}
 			if changed {
@@ -443,14 +432,15 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 				}
 			}
 		}
-		if !valid || !bound || !authorizeDeviceOwnerLocked(deviceID, password, isMainPass, entry) {
+		if !valid || !bound {
 			dbMutex.Unlock()
 			clientConn.Write([]byte("DENIED:device_mismatch"))
 			return
 		}
 		dev, exists := db.Devices[deviceID]
-		if exists && dev.OwnerID == "" {
+		if exists {
 			setDeviceOwner(dev, password)
+			dev.RawOwnerID = wrapKeyID(password)
 		}
 		if exists && dev.RawIP == "" {
 			dev.RawIP = getNextRawIP()

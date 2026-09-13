@@ -158,13 +158,7 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 		entry, isGenPass := db.Passwords[password]
 		valid := isMainPass || (isGenPass && !isPasswordExpired(entry))
 
-		// Для сгенерированных паролей — проверяем привязку к устройству
-		if valid && !authorizeDeviceOwnerLocked(deviceID, password, isMainPass, entry) {
-			clientConn.Write([]byte("DENIED:device_mismatch"))
-			log.Printf("[WG] Отказ: устройство %s принадлежит другому доступу", deviceID)
-			dbMutex.Unlock()
-			return
-		} else if valid && isGenPass && entry.IsDeactivated {
+		if valid && isGenPass && entry.IsDeactivated {
 			clientConn.Write([]byte("DENIED:deactivated"))
 			log.Printf("[WG] Отказ: пароль %s деактивирован, запрос от %s", maskPassword(password), deviceID)
 			dbMutex.Unlock()
@@ -185,8 +179,8 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 			dev, exists := db.Devices[deviceID]
 			if !exists {
 				dev = &ClientDevice{DeviceID: deviceID, IP: getNextIP()}
-				setDeviceOwner(dev, password)
 			}
+			setDeviceOwner(dev, password)
 			// Устройство могло быть создано раньше только Raw-путём
 			// (GETCONF_RAW, см. handleConnRaw) — там PrivKey/PubKey никогда
 			// не генерируются, только IP/RawIP. Без этой проверки такое
@@ -261,8 +255,7 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 		if valid && isGenPass {
 			bound = passwordEntryHasDevice(entry, deviceID)
 		}
-		ownerAllowed := valid && authorizeDeviceOwnerLocked(deviceID, password, isMainPass, entry)
-		if !valid || !bound || !ownerAllowed {
+		if !valid || !bound {
 			dbMutex.Unlock()
 			clientConn.Write([]byte("DENIED:device_mismatch"))
 			return

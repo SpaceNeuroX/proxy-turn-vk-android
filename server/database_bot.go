@@ -586,7 +586,6 @@ func initDB(dir, mainPass, adminID, botToken string) {
 	db.MainPassword = mainPass
 	db.AdminID = adminID
 	db.BotToken = botToken
-	reconcileDeviceOwnershipLocked()
 	if err := saveDB(); err != nil {
 		log.Fatalf("[DB] Не удалось сохранить базу: %v", err)
 	}
