@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly UPSTREAM_REPO="https://github.com/SpaceNeuroX/proxy-turn-vk-android.git"
+readonly RELEASE_API="https://api.github.com/repos/SpaceNeuroX/proxy-turn-vk-android/releases/latest"
+readonly MODULE_NAME="wg-turn-client"
+readonly SERVER_BINARY="${QWDTT_SERVER_BINARY:-/usr/local/bin/wdtt-server}"
+readonly SERVICE_NAME="${QWDTT_SERVICE_NAME:-wdtt.service}"
+readonly SELF="${BASH_SOURCE[0]}"
+UPDATE_TEMP_DIR=''
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  qwdtt --version   Show the installed qWDTT server version
+  qwdtt update      Check for and interactively install the latest release
+  qwdtt --help      Show this help
+USAGE
+}
+
+die() {
+    printf 'qwdtt: error: %s\n' "$*" >&2
+    exit 1
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+run_as_root() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
+    else
+        require_command sudo
+        sudo -- "$@"
+    fi
+}
+
+version_from_binary() {
+    local binary=$1 version=''
+    [[ -x $binary ]] || return 1
+
+    if command -v go >/dev/null 2>&1; then
+        version=$(go version -m "$binary" 2>/dev/null | awk -v module="$MODULE_NAME" '$1 == "mod" && $2 == module { print $3; exit }')
+    fi
+
+    if [[ -z $version ]] && command -v strings >/dev/null 2>&1; then
+        version=$(strings "$binary" 2>/dev/null | awk -v module="$MODULE_NAME" '$1 == "mod" && $2 == module { print $3; exit }')
+    fi
+
+    [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
+show_version() {
+    local version
+    version=$(version_from_binary "$SERVER_BINARY") || \
+        die "cannot determine the version of $SERVER_BINARY"
+    printf 'qWDTT %s\n' "$version"
+}
+
+latest_release() {
+    local response version
+    response=$(curl -fsSL \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "$RELEASE_API") || return 1
+    version=$(printf '%s\n' "$response" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
+cleanup_update_temp() {
+    [[ -z $UPDATE_TEMP_DIR ]] || rm -rf -- "$UPDATE_TEMP_DIR"
+}
+
+rollback() {
+    local backup=$1 staged="${SERVER_BINARY}.rollback.$$"
+    printf 'Update validation failed; rolling back to %s...\n' "$backup" >&2
+    run_as_root install -o root -g root -m 0755 "$backup" "$staged"
+    run_as_root mv -f "$staged" "$SERVER_BINARY"
+    run_as_root systemctl restart "$SERVICE_NAME"
+}
+
+update_server() {
+    local current_output current latest answer temp_dir source_dir built_binary
+    local built_version backup staged timestamp
+
+    require_command curl
+    require_command git
+    require_command go
+    require_command systemctl
+    require_command sort
+
+    # Keep version reporting in one code path: update consumes qwdtt --version.
+    current_output=$("$SELF" --version)
+    current=${current_output##* }
+    latest=$(latest_release) || die "failed to determine the latest official release"
+
+    printf 'Installed: %s\nLatest:    %s\n' "$current" "$latest"
+    if [[ $current == "$latest" ]]; then
+        printf 'qWDTT server is already up to date.\n'
+        return 0
+    fi
+    if [[ $(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1) == "$current" ]]; then
+        printf 'Installed version %s is newer than the latest official release %s; no update performed.\n' "$current" "$latest"
+        return 0
+    fi
+
+    [[ -t 0 ]] || die "update confirmation requires an interactive terminal"
+    read -r -p "Update qWDTT server from $current to $latest now? [y/N] " answer
+    [[ $answer == [Yy] || $answer == [Yy][Ee][Ss] ]] || {
+        printf 'Update cancelled.\n'
+        return 0
+    }
+
+    systemctl cat "$SERVICE_NAME" >/dev/null 2>&1 || die "systemd service not found: $SERVICE_NAME"
+
+    temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/qwdtt-update.XXXXXX")
+    UPDATE_TEMP_DIR=$temp_dir
+    trap cleanup_update_temp EXIT
+    source_dir="$temp_dir/source"
+    built_binary="$temp_dir/wdtt-server"
+
+    printf 'Fetching official release %s...\n' "$latest"
+    git clone --quiet --depth 1 --branch "$latest" "$UPSTREAM_REPO" "$source_dir" || \
+        die "failed to clone official release $latest"
+
+    printf 'Building Linux/amd64 server...\n'
+    (
+        cd "$source_dir"
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -o "$built_binary" ./server
+    ) || die "server build failed"
+
+    built_version=$(version_from_binary "$built_binary") || die "cannot determine built server version"
+    [[ $built_version == "$latest" ]] || \
+        die "built binary reports $built_version, expected $latest"
+
+    timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+    backup="${SERVER_BINARY}.${current}.${timestamp}.bak"
+    staged="${SERVER_BINARY}.new.$$"
+
+    printf 'Backing up %s to %s...\n' "$SERVER_BINARY" "$backup"
+    run_as_root cp -a "$SERVER_BINARY" "$backup"
+    run_as_root install -o root -g root -m 0755 "$built_binary" "$staged"
+    run_as_root mv -f "$staged" "$SERVER_BINARY"
+
+    printf 'Restarting %s...\n' "$SERVICE_NAME"
+    if ! run_as_root systemctl restart "$SERVICE_NAME"; then
+        rollback "$backup" || true
+        die "service restart failed; rollback attempted"
+    fi
+
+    sleep 3
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+        run_as_root journalctl -u "$SERVICE_NAME" -n 30 --no-pager >&2 || true
+        rollback "$backup" || true
+        die "updated service is not active; rollback attempted"
+    fi
+
+    built_version=$(version_from_binary "$SERVER_BINARY") || {
+        rollback "$backup" || true
+        die "cannot validate installed binary; rollback attempted"
+    }
+    [[ $built_version == "$latest" ]] || {
+        rollback "$backup" || true
+        die "installed binary version mismatch; rollback attempted"
+    }
+
+    printf 'qWDTT server updated successfully: %s -> %s\n' "$current" "$latest"
+    printf 'Backup retained at %s\n' "$backup"
+}
+
+case ${1:-} in
+    --version|-V)
+        [[ $# -eq 1 ]] || die "--version takes no arguments"
+        show_version
+        ;;
+    update)
+        [[ $# -eq 1 ]] || die "update takes no arguments"
+        update_server
+        ;;
+    --help|-h|help)
+        usage
+        ;;
+    '')
+        usage
+        exit 1
+        ;;
+    *)
+        die "unknown command: $1 (try --help)"
+        ;;
+esac
