@@ -1,4 +1,4 @@
-module wg-turn-client
+module glebsbp-client
 
 go 1.26
 

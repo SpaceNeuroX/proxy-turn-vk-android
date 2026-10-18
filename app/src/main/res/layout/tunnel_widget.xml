@@ -27,7 +27,7 @@
             android:id="@+id/widget_status_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="qWDTT: Отключен"
+            android:text="qGLEBSBP: Отключен"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />

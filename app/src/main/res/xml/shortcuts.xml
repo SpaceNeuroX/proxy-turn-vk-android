@@ -7,9 +7,9 @@
         android:shortcutShortLabel="@string/shortcut_start_short"
         android:shortcutLongLabel="@string/shortcut_start_long">
         <intent
-            android:action="com.wdtt.client.shortcut.START_TUNNEL"
-            android:targetClass="com.wdtt.client.MainActivity"
-            android:targetPackage="net.qwdtt.client" />
+            android:action="com.glebsbp.client.shortcut.START_TUNNEL"
+            android:targetClass="com.glebsbp.client.MainActivity"
+            android:targetPackage="net.glebsbp.client" />
     </shortcut>
     <shortcut
         android:shortcutId="shortcut_stop_tunnel"
@@ -18,8 +18,8 @@
         android:shortcutShortLabel="@string/shortcut_stop_short"
         android:shortcutLongLabel="@string/shortcut_stop_long">
         <intent
-            android:action="com.wdtt.client.shortcut.STOP_TUNNEL"
-            android:targetClass="com.wdtt.client.MainActivity"
-            android:targetPackage="net.qwdtt.client" />
+            android:action="com.glebsbp.client.shortcut.STOP_TUNNEL"
+            android:targetClass="com.glebsbp.client.MainActivity"
+            android:targetPackage="net.glebsbp.client" />
     </shortcut>
 </shortcuts>

@@ -1,57 +1,28 @@
-# ===== Gradle =====
-.gradle/
-build/
-local.properties
-
-# ===== Android =====
-*.apk
-*.aab
-*.ap_
-*.dex
-*.class
-app/build/
-app/release/
-
-# ===== Go =====
-go.sum
-
-# ===== Native Libraries (compiled) =====
-*.so
-*.dll
-*.dylib
-jniLibs/
-app/src/main/jniLibs/
-
-# ===== Server binary =====
-app/src/main/assets/server
-
-# ===== Keystore / Secrets =====
-*.keystore
-*.jks
-*.key
-*.pem
-
-# ===== IDE =====
-.idea/
 *.iml
+.gradle/
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/go_client/bin/
+/server/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+.idea/
 .vscode/
 *.swp
 *.swo
 *~
-
-# ===== OS =====
-.DS_Store
-Thumbs.db
-Desktop.ini
-
-# ===== Misc =====
 *.log
 *.tmp
-*.bak
-msg.txt
-*.bat
-wdtt-server
-wg-turn-client
-.kotlin/
-.keys/
-.gradle-home/

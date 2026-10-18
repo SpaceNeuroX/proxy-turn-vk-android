@@ -15,11 +15,11 @@ android {
         ?.ifEmpty { null }
         ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
-    namespace = "com.wdtt.client"   
+    namespace = "com.glebsbp.client"   
     compileSdk = 35
     
     defaultConfig {
-        applicationId = "net.qwdtt.client"
+        applicationId = "net.glebsbp.client"
         minSdk = 28
         targetSdk = 35
         versionCode = 42

@@ -50,7 +50,7 @@ func getDefaultInterface() string {
 	if out != "" {
 		return strings.TrimSpace(out)
 	}
-	out = runCmdSilent("bash", "-c", "ip -o link show | awk -F': ' '{print $2}' | grep -v -E 'lo|wg|tun|wdtt' | head -1")
+	out = runCmdSilent("bash", "-c", "ip -o link show | awk -F': ' '{print $2}' | grep -v -E 'lo|wg|tun|glebsbp' | head -1")
 	if out != "" {
 		return strings.TrimSpace(out)
 	}

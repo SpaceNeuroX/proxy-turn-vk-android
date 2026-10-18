@@ -31,7 +31,7 @@ func main() {
 	adminCert := flag.String("admin-cert", "", "TLS сертификат admin API")
 	adminKey := flag.String("admin-key", "", "TLS ключ admin API")
 	wgPort := flag.Int("wg-port", defaultInternalWGPort, "WireGuard UDP порт")
-	configDir := flag.String("config-dir", "/etc/wdtt", "директория конфигурации")
+	configDir := flag.String("config-dir", "/etc/glebsbp", "директория конфигурации")
 	mainPass := flag.String("password", "", "пароль владельца")
 	mainPassFile := flag.String("password-file", "", "файл пароля владельца")
 	adminID := flag.String("admin", "", "Telegram Admin ID")
@@ -51,7 +51,7 @@ func main() {
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 	log.Println("══════════════════════════════════════════")
-	log.Println("   WDTT Server v2 (Multi-User)")
+	log.Println("   GLEBSBP Server v2 (Multi-User)")
 	log.Println("══════════════════════════════════════════")
 
 	ctx, cancel := context.WithCancel(context.Background())
