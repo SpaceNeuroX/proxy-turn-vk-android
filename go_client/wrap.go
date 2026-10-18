@@ -23,7 +23,7 @@ func deriveWrapKey(password string) ([]byte, error) {
 	reader := hkdf.New(
 		sha256.New,
 		[]byte(password),
-		[]byte("WDTT-WRAP-v1"),
+		[]byte("GLEBSBP-WRAP-v1"),
 		[]byte("rtp-obfs/chacha20poly1305"),
 	)
 	if _, err := io.ReadFull(reader, key); err != nil {

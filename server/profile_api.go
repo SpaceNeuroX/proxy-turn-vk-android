@@ -117,7 +117,7 @@ func handleAPIProfileChallenge(w http.ResponseWriter, r *http.Request) {
 }
 
 func profileKeyID(password string) string {
-	sum := sha256.Sum256([]byte("WDTT-PROFILE-ID-v1\x00" + password))
+	sum := sha256.Sum256([]byte("GLEBSBP-PROFILE-ID-v1\x00" + password))
 	return hex.EncodeToString(sum[:])
 }
 

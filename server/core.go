@@ -1,7 +1,7 @@
 package main
 
 const (
-	wgIfaceName           = "wdtt0"
+	wgIfaceName           = "glebsbp0"
 	wgServerAddr          = "10.66.66.1"
 	wgServerCIDR          = wgServerAddr + "/16"
 	defaultInternalWGPort = 56001
@@ -10,7 +10,7 @@ const (
 
 	// Raw-IP роутер (без WireGuard) — отдельный TUN/подсеть/NAT, полностью
 	// параллельно WG-пути. Подсеть намеренно не пересекается с wgServerCIDR.
-	rawIfaceName  = "wdttraw0"
+	rawIfaceName  = "glebsbpraw0"
 	rawServerAddr = "10.70.66.1"
 	rawServerCIDR = rawServerAddr + "/16"
 	// Raw-режим не несёт WG data header (~32 байта) — только RTP-obfs (12 байт
