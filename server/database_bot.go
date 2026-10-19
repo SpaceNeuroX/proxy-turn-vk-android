@@ -373,7 +373,7 @@ func deriveWrapKey(password string) ([]byte, error) {
 	reader := hkdf.New(
 		sha256.New,
 		[]byte(password),
-		[]byte("WDTT-WRAP-v1"),
+		[]byte("GLEBSBP-WRAP-v1"),
 		[]byte("rtp-obfs/chacha20poly1305"),
 	)
 	if _, err := io.ReadFull(reader, key); err != nil {
@@ -383,7 +383,7 @@ func deriveWrapKey(password string) ([]byte, error) {
 }
 
 func wrapKeyID(password string) string {
-	sum := sha256.Sum256([]byte("WDTT-WRAP-ID-v1\x00" + password))
+	sum := sha256.Sum256([]byte("GLEBSBP-WRAP-ID-v1\x00" + password))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -695,10 +695,17 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 
 	// Устанавливаем команды для синей кнопки Menu
 	go func() {
-		cmds := `{"commands":[{"command":"new","description":"Создать временный пароль"},{"command":"list","description":"Управление доступами"}]}`
-		resp, err := http.Post(fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", token), "application/json", strings.NewReader(cmds))
+		// Команды для админа (личный scope)
+		adminCmds := `{"scope":{"type":"chat","chat_id":` + adminIDstr + `},"commands":[{"command":"new","description":"Создать временный пароль"},{"command":"list","description":"Управление доступами"}]}`
+		resp, err := http.Post(fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", token), "application/json", strings.NewReader(adminCmds))
 		if err == nil {
 			resp.Body.Close()
+		}
+		// Команды для всех пользователей (default scope) — магазин подписок
+		userCmds := `{"commands":[{"command":"buy","description":"Купить VPN подписку"},{"command":"help","description":"Как подключиться"}]}`
+		resp2, err2 := http.Post(fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", token), "application/json", strings.NewReader(userCmds))
+		if err2 == nil {
+			resp2.Body.Close()
 		}
 	}()
 
@@ -731,7 +738,10 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					Chat struct {
 						ID int64 `json:"id"`
 					} `json:"chat"`
-					Text string `json:"text"`
+					Text              string `json:"text"`
+					SuccessfulPayment *struct {
+						Payload string `json:"payload"`
+					} `json:"successful_payment"`
 				} `json:"message"`
 				CallbackQuery *struct {
 					ID      string `json:"id"`
@@ -757,6 +767,11 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 			offset = u.UpdateID + 1
 
 			// ═══ Callback кнопки ═══
+			if u.CallbackQuery != nil && u.CallbackQuery.Message.Chat.ID != adminID {
+				// Пользовательский callback — магазин GLEBSBP Store
+				handleStoreCallback(token, u.CallbackQuery.Message.Chat.ID, u.CallbackQuery.ID, u.CallbackQuery.Data, true)
+				continue
+			}
 			if u.CallbackQuery != nil && u.CallbackQuery.Message.Chat.ID == adminID {
 				data := u.CallbackQuery.Data
 				answerCallback(token, u.CallbackQuery.ID)
@@ -779,7 +794,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 						}
 						pts := strings.Split(ports, ",")
 						srvIP := getPublicIP()
-						link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], pass, entry.VkHash)
+						link := fmt.Sprintf("glebsbp://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], pass, entry.VkHash)
 						txt += fmt.Sprintf("🔗 *Быстрая ссылка:* `%s`\n", link)
 					}
 					if entry.IsDeactivated {
@@ -942,7 +957,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					if exists && entry != nil {
 						srvIP := getPublicIP()
 						configJSON := fmt.Sprintf(`{
-  "name": "qWDTT - %s",
+  "name": "GLEBSBP - %s",
   "peer": "%s",
   "vkHashes": "%s",
   "workersPerHash": 9,
@@ -951,7 +966,7 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 }`, srvIP, srvIP, entry.VkHash, pass)
 						dbMutex.Unlock()
 
-						fileName := fmt.Sprintf("qwdtt_%s.conf", pass)
+						fileName := fmt.Sprintf("glebsbp_%s.conf", pass)
 						sendTelegramFile(token, adminID, fileName, []byte(configJSON))
 					} else {
 						dbMutex.Unlock()
@@ -1052,7 +1067,25 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 
 			// ═══ Текстовые команды ═══
 			msg := u.Message
-			if msg == nil || msg.Chat.ID != adminID {
+			if msg == nil {
+				continue
+			}
+
+			// ── GLEBSBP Store: оплата Telegram Stars подтверждена ──
+			if msg.SuccessfulPayment != nil && msg.SuccessfulPayment.Payload != "" {
+				confirmStarPayment(token, msg.SuccessfulPayment.Payload)
+				continue
+			}
+
+			// ── GLEBSBP Store: пользовательские команды (не админ) ──
+			if msg.Chat.ID != adminID {
+				userCmd := strings.TrimSpace(msg.Text)
+				switch {
+				case userCmd == "/start" || userCmd == "/buy" || userCmd == "/menu" || userCmd == "/help":
+					sendStoreWelcome(token, msg.Chat.ID)
+				default:
+					sendTelegram(token, msg.Chat.ID, "👋 Отправь /buy чтобы выбрать тариф GLEBSBP VPN.", nil)
+				}
 				continue
 			}
 
@@ -1137,26 +1170,26 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					targetPassword = ""
 					srvIP := getPublicIP()
 					pts := strings.Split(tempPorts, ",")
-					link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], db.MainPassword, hash)
+					link := fmt.Sprintf("glebsbp://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], db.MainPassword, hash)
 
-					nameEsc := neturl.QueryEscape(fmt.Sprintf("qWDTT - Main (%s)", srvIP))
+					nameEsc := neturl.QueryEscape(fmt.Sprintf("GLEBSBP - Main (%s)", srvIP))
 					peerEsc := neturl.QueryEscape(srvIP)
 					hashesEsc := neturl.QueryEscape(hash)
 					passEsc := neturl.QueryEscape(db.MainPassword)
-					qwdttLink := fmt.Sprintf("qwdtt://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
+					glebsbpLink := fmt.Sprintf("glebsbp://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
 
-					msgText := fmt.Sprintf("🔗 *Ссылка для главного пароля:*\n`%s`\n\n🔗 *Быстрая ссылка qWDTT:* `%s`", link, qwdttLink)
+					msgText := fmt.Sprintf("🔗 *Ссылка для главного пароля:*\n`%s`\n\n🔗 *Быстрая ссылка GLEBSBP:* `%s`", link, glebsbpLink)
 					sendTelegram(token, adminID, msgText, nil)
 
 					configJSON := fmt.Sprintf(`{
-  "name": "qWDTT - Main (%s)",
+  "name": "GLEBSBP - Main (%s)",
   "peer": "%s",
   "vkHashes": "%s",
   "workersPerHash": 9,
   "listenPort": 9000,
   "password": "%s"
 }`, srvIP, srvIP, hash, db.MainPassword)
-					fileName := fmt.Sprintf("qwdtt_main_%s.conf", srvIP)
+					fileName := fmt.Sprintf("glebsbp_main_%s.conf", srvIP)
 					sendTelegramFile(token, adminID, fileName, []byte(configJSON))
 					continue
 				}
@@ -1206,15 +1239,15 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 				expDate := time.Unix(expiresAt, 0).Format("02.01.2006")
 				srvIP := getPublicIP()
 				pts := strings.Split(tempPorts, ",")
-				link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], newPass, hash)
+				link := fmt.Sprintf("glebsbp://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], newPass, hash)
 
 				nameEsc := neturl.QueryEscape(newLabel)
 				peerEsc := neturl.QueryEscape(srvIP)
 				hashesEsc := neturl.QueryEscape(hash)
 				passEsc := neturl.QueryEscape(newPass)
-				qwdttLink := fmt.Sprintf("qwdtt://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
+				glebsbpLink := fmt.Sprintf("glebsbp://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
 
-				msgText := fmt.Sprintf("👤 Имя: *%s*\n🔑 Новый пароль:\n`%s`\n\n⏰ Действует %d дн. (до %s)\n📱 Лимит: %d устройств\nОжидает первого подключения\n\n🔗 *Быстрая ссылка qWDTT:* `%s`\n\n🔗 *Legacy ссылка:* `%s`", newLabel, newPass, tempDays, expDate, tempMaxDevs, qwdttLink, link)
+				msgText := fmt.Sprintf("👤 Имя: *%s*\n🔑 Новый пароль:\n`%s`\n\n⏰ Действует %d дн. (до %s)\n📱 Лимит: %d устройств\nОжидает первого подключения\n\n🔗 *Быстрая ссылка GLEBSBP:* `%s`\n\n🔗 *Legacy ссылка:* `%s`", newLabel, newPass, tempDays, expDate, tempMaxDevs, glebsbpLink, link)
 				sendTelegram(token, adminID, msgText, nil)
 
 				configJSON := fmt.Sprintf(`{
@@ -1225,13 +1258,13 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
   "listenPort": 9000,
   "password": "%s"
 }`, newLabel, srvIP, hash, newPass)
-				fileName := fmt.Sprintf("qwdtt_%s.conf", newPass)
+				fileName := fmt.Sprintf("glebsbp_%s.conf", newPass)
 				sendTelegramFile(token, adminID, fileName, []byte(configJSON))
 				continue
 			}
 
 			if cmd == "/start" || cmd == "/help" {
-				sendTelegram(token, adminID, "🤖 *qWDTT VPN Manager*\n\n/new — Создать пароль\n/list — Список паролей", nil)
+				sendTelegram(token, adminID, "🤖 *GLEBSBP VPN Manager*\n\n/new — Создать пароль\n/list — Список паролей", nil)
 
 			} else if strings.HasPrefix(cmd, "/new ") || cmd == "/new" {
 				args := strings.Fields(strings.TrimPrefix(cmd, "/new"))

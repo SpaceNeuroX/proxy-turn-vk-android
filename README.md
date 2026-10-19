@@ -1,33 +1,39 @@
-# qWDTT
+# GLEBSBP
 
-qWDTT — Android-приложение для подключения к собственному VPS через TURN-инфраструктуру звонков VK.
+**GLEBSBP — Система Быстрого Подключения.** Android-приложение и сервер для быстрого подключения к собственному VPS через TURN-инфраструктуру звонков VK.
 
 Приложение создаёт системный VPN-туннель на телефоне, передаёт зашифрованный трафик через VK TURN и выпускает его в интернет через ваш сервер. Для сети такое соединение похоже на медиатрафик звонка WebRTC, а не на обычное прямое подключение к VPN-серверу.
 
 ## Быстрый старт
 
-1. Скачайте APK в разделе [Releases](https://github.com/SpaceNeuroX/proxy-turn-vk-android/releases).
+1. Скачайте APK в разделе [Releases](https://github.com/GLEBSBP/GLEBSBP/releases).
 2. Добавьте VPS на вкладке «Серверы» и выполните установку серверной части.
-3. Создайте профиль подключения или импортируйте готовую ссылку.
+3. Создайте профиль подключения или импортируйте готовую ссылку (`glebsbp://config...`).
 4. Добавьте хеш звонка VK.
 5. Нажмите «Подключить» и разрешите Android создать VPN-соединение.
 
 ## Сборки
 
-- стабильные подписанные версии публикуются в [GitHub Releases](https://github.com/SpaceNeuroX/proxy-turn-vk-android/releases);
-- тестовые debug-сборки ветки `develop` доступны в [GitHub Actions](https://github.com/SpaceNeuroX/proxy-turn-vk-android/actions/workflows/android-debug.yml).
+- стабильные подписанные версии публикуются в [GitHub Releases](https://github.com/GLEBSBP/GLEBSBP/releases);
+- тестовые debug-сборки ветки `develop` доступны в [GitHub Actions](https://github.com/GLEBSBP/GLEBSBP/actions/workflows/android-debug.yml);
+- пошаговая инструкция, как собрать APK на своём ПК или через GitHub Actions — в [docs/BUILD_APK.md](docs/BUILD_APK.md).
+
+## Telegram-бот и оплата
+
+Серверная часть включает встроенного Telegram-бота управления доступами (`/new`, `/list`, `/pay`):
+
+- выдача временных паролей и конфиков прямо в чат бота;
+- **CryptoPay (crypto.bot / CryptoBot API)** — оплата подписок криптовалютой;
+- **ЮKassa** — оплата картами и СБП;
+- **Telegram Stars** — оплата звёздами через Bot Payments API.
+
+Настройка платежей — в файле `payments.json` в директории `/etc/glebsbp` (см. `server/payments.example.json`).
 
 ## Обсуждение и поддержка
 
-- [Группа qWDTT в Telegram](https://t.me/darkbit_chat)
-- [Поддержать разработку](https://pay.cloudtips.ru/p/64a6c43c)
+- [Канал GLEBSBP в Telegram](https://t.me/glebsbp_channel)
+- [Бот поддержки и покупки доступа](https://t.me/glebsbp_bot)
 
 ## Лицензия
 
 Проект распространяется по лицензии [GNU GPL v3](LICENSE).
-
-## Происхождение проекта
-
-При создании qWDTT в качестве технической основы использовались исходники Android-приложения и серверной части оригинального проекта [WDTT](https://github.com/amurcanov/proxy-turn-vk-android). Оригинальный репозиторий сейчас архивирован.
-
-qWDTT — самостоятельное развитие этой кодовой базы: приложение, интерфейс, режимы подключения, управление серверами и значительная часть клиентской и серверной логики развиваются отдельно. Проект не является официальным продолжением или новым релизом оригинального WDTT.

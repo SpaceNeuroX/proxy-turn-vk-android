@@ -10,7 +10,7 @@ func workerErrorHint(err error) string {
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "wrap_auth_timeout"):
-		return "сервер не ответил на WRAP/DTLS — проверьте пароль, IP/порт и что wdtt-server запущен"
+		return "сервер не ответил на WRAP/DTLS — проверьте пароль, IP/порт и что glebsbp-server запущен"
 	case strings.Contains(text, "context canceled"):
 		return "соединение прервано до handshake — часто сервер недоступен, UDP режет оператор или сменилась сеть"
 	case strings.Contains(text, "context deadline exceeded"):
@@ -18,7 +18,7 @@ func workerErrorHint(err error) string {
 	case strings.Contains(text, "deadline exceeded") || strings.Contains(text, "timeout") || strings.Contains(text, "i/o timeout"):
 		return "таймаут — сервер не отвечает, проверьте доступность VPS и пароль"
 	case strings.Contains(text, "connection refused"):
-		return "сервер отклонил подключение — проверьте IP, порт DTLS и что wdtt-server запущен"
+		return "сервер отклонил подключение — проверьте IP, порт DTLS и что glebsbp-server запущен"
 	case strings.Contains(text, "connection reset"):
 		return "сервер сбросил соединение — возможен неверный пароль WRAP или перезапуск сервера"
 	case strings.Contains(text, "no route") || strings.Contains(text, "network is unreachable"):

@@ -13,15 +13,14 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
-        android:name=".WdttApplication"
+        android:name=".GlebsbpApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="qWDTT"
+        android:label="GLEBSBP"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:extractNativeLibs="true"
-        android:theme="@style/Theme.WDTTClient">
+        android:theme="@style/Theme.GlebsbpClient">
 
         <activity
             android:name=".MainActivity"
@@ -40,7 +39,17 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
-            <!-- Открытие .qwdtt файлов -->
+            <!-- Deep link: glebsbp://config?... (кнопка «Открыть в GLEBSBP» в боте)
+                 а также старые схемы wdtt:// и qwdtt:// для совместимости -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="glebsbp" />
+                <data android:scheme="wdtt" />
+                <data android:scheme="qwdtt" />
+            </intent-filter>
+            <!-- Открытие .glebsbp файлов -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -49,7 +58,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.qwdtt" />
+                <data android:scheme="file" android:host="*" android:pathPattern=".*\\.glebsbp" />
             </intent-filter>
             <!-- Открытие .conf файлов -->
             <intent-filter>
@@ -124,11 +133,11 @@
 
         <receiver
             android:name=".TunnelWidgetProvider"
-            android:label="qWDTT Туннель"
+            android:label="qGLEBSBP Туннель"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="net.qwdtt.client.ACTION_TOGGLE" />
+                <action android:name="net.glebsbp.client.ACTION_TOGGLE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
@@ -137,7 +146,7 @@
 
         <service
             android:name=".QuickToggleTileService"
-            android:label="qWDTT"
+            android:label="GLEBSBP"
             android:icon="@drawable/ic_tile_custom"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">

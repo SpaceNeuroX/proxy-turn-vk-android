@@ -15,11 +15,11 @@ android {
         ?.ifEmpty { null }
         ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
-    namespace = "com.wdtt.client"   
+    namespace = "com.glebsbp.client"   
     compileSdk = 35
     
     defaultConfig {
-        applicationId = "net.qwdtt.client"
+        applicationId = "net.glebsbp.client"
         minSdk = 28
         targetSdk = 35
         versionCode = 42
@@ -74,6 +74,12 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            // Debug-сборка всегда подписывается стандартным debug-ключом.
+            // Это гарантирует, что APK не получится "unsigned"
+            // (ошибка INSTALL_PARSE_FAILED_NO_CERTIFICATES при установке).
+            signingConfig = signingConfigs.getByName("debug")
+        }
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -87,13 +93,15 @@ android {
             } else if (keyFile != null) {
                 file(keyFile)
             } else null
-            
+
             if (resolvedFile != null && resolvedFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
                 println("✅ Signing config applied: ${resolvedFile.absolutePath}")
             } else {
-                println("⚠️ WARNING: Keystore not found, using debug signing")
+                println("⚠️ WARNING: Keystore not found, falling back to debug signing")
                 println("   Looked for: ${resolvedFile?.absolutePath ?: keyFile}")
+                // Подписываем debug-ключом, чтобы release-APK тоже можно было установить
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }

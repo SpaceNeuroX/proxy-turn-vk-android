@@ -1,0 +1,62 @@
+name: Android Release APK
+
+on:
+  push:
+    tags:
+      - 'v*' # Скрипт сработает только тогда, когда вы создадите тег, например v1.0.0 или v2.1-beta
+
+concurrency:
+  group: android-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # Важно! Разрешает скрипту создавать релизы и загружать туда файлы
+
+jobs:
+  build-and-release:
+    name: Build and Publish Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: |
+            go.sum
+            go_client/go.sum
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      # Собираем дебажный или релизный APK (в зависимости от того, настроены ли у вас ключи подписи)
+      # Пока оставляем assembleDebug, чтобы сборка гарантированно прошла без настройки Keystore
+      - name: Build APK
+        run: ./gradlew :app:assembleDebug -PtargetAbis=arm64-v8a --no-daemon
+
+      # Публикация релиза на GitHub
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Токен создается гитхабом автоматически

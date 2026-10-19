@@ -68,7 +68,7 @@ jobs:
           test -n "$KEYSTORE_PASSWORD"
           test -n "$KEY_ALIAS"
           test -n "$KEY_PASSWORD"
-          keystore="$RUNNER_TEMP/qwdtt-release.jks"
+          keystore="$RUNNER_TEMP/glebsbp-release.jks"
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
           printf '%s\n' \
             "KEYSTORE_FILE=$keystore" \
@@ -91,7 +91,7 @@ jobs:
             base="$(basename "$apk")"
             arch="${base#app-}"
             arch="${arch%-release.apk}"
-            cp "$apk" "dist/qwdtt-${version}-${arch}.apk"
+            cp "$apk" "dist/glebsbp-${version}-${arch}.apk"
             found=1
           done
           test "$found" = 1
@@ -103,7 +103,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          args=(--title "qWDTT ${GITHUB_REF_NAME}" --generate-notes)
+          args=(--title "GLEBSBP ${GITHUB_REF_NAME}" --generate-notes)
           case "$GITHUB_REF_NAME" in
             *-alpha*|*-beta*|*-rc*) args+=(--prerelease) ;;
           esac
