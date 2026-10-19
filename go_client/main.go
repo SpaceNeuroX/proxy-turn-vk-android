@@ -283,25 +283,73 @@ func main() {
 	}
 
 	if *pingOnly {
-		var lastErr error
-		for i, hash := range hashes {
-			user, pass, turnURLs, err := GetCreds(ctx, hash, 999)
-			if err != nil {
-				lastErr = fmt.Errorf("GetCreds hash %d: %v", i, err)
-				continue
-			}
-			creds := &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: 999}
-			rtt, err := RunPing(ctx, tp, peer, creds)
-			if err != nil {
-				lastErr = fmt.Errorf("RunPing hash %d: %v", i, err)
-				continue
-			}
-			fmt.Printf("PING_RESULT|%d\n", rtt)
-			os.Exit(0)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 45*time.Second)
+		defer pingCancel()
+
+		// Пробуем все хеши параллельно — первый успешный RTT и есть результат.
+		// Раньше хеши перебирались последовательно с троттлингом VK-запросов
+		// (3-6 сек между получением кредов), из-за чего пинг не успевал
+		// завершиться на стороне приложения и показывался как «не работает».
+		type pingOutcome struct {
+			rtt     int64
+			turnURL string
+			err     error
 		}
-		// Если все хеши провалились
-		fmt.Printf("PING_ERROR|All hashes failed. Last error: %v\n", lastErr)
-		os.Exit(1)
+		results := make(chan pingOutcome, len(hashes))
+		var pwg sync.WaitGroup
+		for i, hash := range hashes {
+			pwg.Add(1)
+			go func(idx int, h string) {
+				defer pwg.Done()
+				streamID := 999 + idx*10 // разные кэши кредов, чтобы не блокировать друг друга
+				user, pass, turnURLs, err := GetCreds(pingCtx, h, streamID)
+				if err != nil {
+					results <- pingOutcome{err: fmt.Errorf("hash %d: GetCreds: %v", idx, err)}
+					return
+				}
+				if len(turnURLs) == 0 {
+					results <- pingOutcome{err: fmt.Errorf("hash %d: нет TURN URL", idx)}
+					return
+				}
+				creds := &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: streamID}
+				rtt, err := RunPing(pingCtx, tp, peer, creds)
+				if err != nil {
+					results <- pingOutcome{err: fmt.Errorf("hash %d: %v (%s)", idx, err, turnURLs[0])}
+					return
+				}
+				results <- pingOutcome{rtt: rtt, turnURL: turnURLs[0]}
+			}(i, hash)
+		}
+
+		go func() {
+			pwg.Wait()
+			close(results)
+		}()
+
+		okCount := 0
+		var lastErr error
+		firstResult := true
+		for res := range results {
+			if res.err != nil {
+				lastErr = res.err
+				log.Printf("[PING] %v", res.err)
+				continue
+			}
+			okCount++
+			if firstResult {
+				fmt.Printf("PING_RESULT|%d\n", res.rtt)
+				firstResult = false
+			}
+			fmt.Printf("PING_SERVER|%s|%d\n", res.turnURL, res.rtt)
+		}
+		if okCount == 0 {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("нет результатов")
+			}
+			fmt.Printf("PING_ERROR|%v\n", lastErr)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	// Слушаем локально (SO_REUSEADDR — быстрый перезапуск без «address already in use»)

@@ -39,12 +39,15 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
-            <!-- Deep link: glebsbp://config?... (кнопка «Открыть в GLEBSBP» в боте) -->
+            <!-- Deep link: glebsbp://config?... (кнопка «Открыть в GLEBSBP» в боте)
+                 а также старые схемы wdtt:// и qwdtt:// для совместимости -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="glebsbp" />
+                <data android:scheme="wdtt" />
+                <data android:scheme="qwdtt" />
             </intent-filter>
             <!-- Открытие .glebsbp файлов -->
             <intent-filter>
