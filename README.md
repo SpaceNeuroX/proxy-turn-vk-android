@@ -15,7 +15,8 @@
 ## Сборки
 
 - стабильные подписанные версии публикуются в [GitHub Releases](https://github.com/GLEBSBP/GLEBSBP/releases);
-- тестовые debug-сборки ветки `develop` доступны в [GitHub Actions](https://github.com/GLEBSBP/GLEBSBP/actions/workflows/android-debug.yml).
+- тестовые debug-сборки ветки `develop` доступны в [GitHub Actions](https://github.com/GLEBSBP/GLEBSBP/actions/workflows/android-debug.yml);
+- пошаговая инструкция, как собрать APK на своём ПК или через GitHub Actions — в [docs/BUILD_APK.md](docs/BUILD_APK.md).
 
 ## Telegram-бот и оплата
 
