@@ -26,3 +26,7 @@ local.properties
 *~
 *.log
 *.tmp
+# signing keys and secrets — NEVER commit these
+*.jks
+*.keystore
+/dist/

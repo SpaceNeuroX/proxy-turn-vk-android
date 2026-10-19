@@ -755,6 +755,7 @@ fun SettingsTabContent(
                                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    PaletteCircleOption("gleb", 0xFFC2EE00, currentPalette, onPaletteChange)
                                     PaletteCircleOption("indigo", 0xFF5B588D, currentPalette, onPaletteChange)
                                     PaletteCircleOption("forest", 0xFF5F5D68, currentPalette, onPaletteChange)
                                     PaletteCircleOption("espresso", 0xFF6D4C41, currentPalette, onPaletteChange)
@@ -911,7 +912,7 @@ fun SettingsTabContent(
                             fontWeight = FontWeight.Medium
                         )
                         Text(
-                            "Подтягивать профили с сервера подписки при открытии приложения (когда туннель выключен)",
+                            "Подтягивать подписки с сервера подписки при открытии приложения (когда туннель выключен)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1520,7 +1521,7 @@ fun SettingsTabContent(
                             ) {
                                 Button(
                                     onClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/glebsbp_channel"))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/glebsbp"))
                                         context.startActivity(intent)
                                     },
                                     shape = RoundedCornerShape(8.dp),
@@ -1601,7 +1602,7 @@ fun SettingsTabContent(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        "Готовые профили",
+                                        "Купить подписку",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -1609,7 +1610,7 @@ fun SettingsTabContent(
                                 }
                                 
                                 Text(
-                                    "Вы можете получить готовые конфиги напрямую в этих Telegram-ботах:",
+                                    "Подписка выдаётся автоматически после оплаты в официальном боте:",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1642,7 +1643,7 @@ fun SettingsTabContent(
 
                                     Button(
                                         onClick = {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/glebsbp_support"))
+                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/GLEBSPB_bot"))
                                             context.startActivity(intent)
                                         },
                                         modifier = Modifier.fillMaxWidth(),
@@ -1655,7 +1656,7 @@ fun SettingsTabContent(
                                         contentPadding = PaddingValues(vertical = 10.dp)
                                     ) {
                                         Text(
-                                            "🤖 @sidylinkbot",
+                                            "💬 Поддержка: @GLEBSPB_bot",
                                             maxLines = 1,
                                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                             style = MaterialTheme.typography.labelMedium
@@ -1855,7 +1856,7 @@ fun SettingsTabContent(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = if (currentProfileName.isNotEmpty()) "Профиль: $currentProfileName" else "Быстрый выбор профиля",
+                            text = if (currentProfileName.isNotEmpty()) "Подписка: $currentProfileName" else "Быстрый выбор подписки",
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -1904,7 +1905,7 @@ fun SettingsTabContent(
                                             requestVpnAndStart()
                                         }
 
-                                        Toast.makeText(context, "Профиль «${p.name}» применен!", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Подписка «${p.name}» применена!", Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 leadingIcon = {
@@ -1950,7 +1951,7 @@ fun SettingsTabContent(
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                "Добавьте или импортируйте профиль во вкладке «Профили»",
+                                "Добавьте или импортируйте подписку во вкладке «Подписки»",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

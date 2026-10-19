@@ -43,7 +43,7 @@ object SubscriptionImport {
             val parsed = parsePayload(body)
                 ?: return@withContext Result.failure(IllegalArgumentException("Неверный формат подписки"))
             if (parsed.profiles.isEmpty()) {
-                return@withContext Result.failure(IllegalArgumentException("В подписке нет профилей"))
+                return@withContext Result.failure(IllegalArgumentException("В подписке нет подписок"))
             }
             Result.success(parsed)
         } catch (e: Exception) {
@@ -167,7 +167,7 @@ object SubscriptionImport {
     private fun parseGlebsbpUri(trimmed: String): ConnectionProfile? {
         return try {
             val uri = android.net.Uri.parse(trimmed.replace("glebsbp:config", "glebsbp://config"))
-            val name = uri.getQueryParameter("name") ?: "QR Профиль"
+            val name = uri.getQueryParameter("name") ?: "QR-подписка"
             val peer = uri.getQueryParameter("peer") ?: return null
             val hashes = uri.getQueryParameter("hashes") ?: ""
             val workers = uri.getQueryParameter("workers")?.toIntOrNull() ?: 9

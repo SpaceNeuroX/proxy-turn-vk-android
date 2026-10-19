@@ -320,7 +320,7 @@ class ProfilesStore(context: Context) {
         if (!fromSubscriptionSync && profile.groupId.isNotBlank() && isSubscriptionGroup(profile.groupId)) {
             val existing = getProfileOnce(profile.id)
             if (existing == null || existing.groupId != profile.groupId) {
-                throw IllegalArgumentException("В папку подписки нельзя добавлять профили вручную")
+                throw IllegalArgumentException("В папку подписки нельзя добавлять подписки вручную")
             }
         }
         dataStore.edit { prefs ->
@@ -386,14 +386,14 @@ class ProfilesStore(context: Context) {
         }
     }
 
-    /** Существующая папка с тем же именем: профили в ней удаляются, затем импортируются новые. */
+    /** Существующая папка с тем же именем: подписки в ней удаляются, затем импортируются новые. */
     suspend fun resolveGroupIdForImport(groupName: String, fromSubscription: Boolean = false): String = withContext(Dispatchers.IO) {
         val trimmed = groupName.trim()
         if (trimmed.isEmpty()) return@withContext ""
         val existing = findGroupByName(trimmed)
         if (existing != null) {
             if (!fromSubscription && isSubscriptionGroup(existing.id)) {
-                throw IllegalArgumentException("Папка «$trimmed» — подписка, добавлять профили вручную нельзя")
+                throw IllegalArgumentException("Папка «$trimmed» — подписка, добавлять подписки вручную нельзя")
             }
             deleteProfilesInGroup(existing.id)
             return@withContext existing.id

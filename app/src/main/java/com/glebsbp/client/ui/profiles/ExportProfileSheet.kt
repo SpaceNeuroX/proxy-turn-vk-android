@@ -102,7 +102,7 @@ fun ExportProfileSheet(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "Экспорт профиля",
+                "Экспорт подписки",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )

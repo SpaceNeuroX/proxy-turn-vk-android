@@ -51,7 +51,7 @@ data class ManagedServer(
  * плюс отдельные ключи "server_<field>_<id>" на каждое поле. Секреты
  * (SSH-пароль, приватный ключ, пароль от ключа, admin-пароль) шифруются тем
  * же SecureStringStore (AndroidKeyStore/AES-GCM), что и ProfilesStore для
- * пароля профиля — никакой новой криптосхемы.
+ * пароля подписки — никакой новой криптосхемы.
  */
 class ServersStore(context: Context) {
     private val appContext = context.applicationContext

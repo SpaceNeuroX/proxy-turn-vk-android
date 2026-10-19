@@ -49,7 +49,7 @@ val GlebTypography = Typography(
     labelSmall = TextStyle(fontFamily = InterFontFamily, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.5.sp),
 )
 
-// ═══ Светлая палитра — «Раф на кокосовом молоке» ═══
+// ═══ Светлая палитра — «Arctic» (нейтральная база GLEBSBP) ═══
 private val LightColorScheme = lightColorScheme(
     primary = Color(0xFF6D4C41),
     onPrimary = Color(0xFFFFFFFF),
@@ -81,7 +81,7 @@ private val LightColorScheme = lightColorScheme(
     surfaceTint = Color(0xFF6D4C41),
 )
 
-// ═══ Тёмная палитра — «Эспрессо» ═══
+// ═══ Тёмная палитра — «Classic» (нейтральная база GLEBSBP) ═══
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFFD7CCC8),
     onPrimary = Color(0xFF3E2723),
@@ -111,6 +111,69 @@ private val DarkColorScheme = darkColorScheme(
     inverseOnSurface = Color(0xFF322F2D),
     inversePrimary = Color(0xFF6D4C41),
     surfaceTint = Color(0xFFD7CCC8),
+)
+
+// ═══ Фирменная палитра GLEBSBP — «Neon Volt»: электрический лайм + глубокий графит ═══
+private val GlebLightColorScheme = lightColorScheme(
+    primary = Color(0xFF4B5A10),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFCCDF7A),
+    onPrimaryContainer = Color(0xFF151A00),
+    secondary = Color(0xFF5D6338),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFE2E8B8),
+    onSecondaryContainer = Color(0xFF1A1F00),
+    tertiary = Color(0xFF3C654C),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFBEEBD0),
+    onTertiaryContainer = Color(0xFF00210F),
+    background = Color(0xFFFAF9ED),
+    onBackground = Color(0xFF1B1D12),
+    surface = Color(0xFFF5F5E6),
+    onSurface = Color(0xFF1B1D12),
+    surfaceVariant = Color(0xFFE3E4CF),
+    onSurfaceVariant = Color(0xFF464839),
+    outline = Color(0xFF777962),
+    outlineVariant = Color(0xFFC7C8AE),
+    error = Color(0xFFBA1A1A),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002),
+    inverseSurface = Color(0xFF303225),
+    inverseOnSurface = Color(0xFFF2F2E4),
+    inversePrimary = Color(0xFFB3C663),
+    surfaceTint = Color(0xFF4B5A10),
+)
+
+private val GlebDarkColorScheme = darkColorScheme(
+    primary = Color(0xFFC2EE00),          // фирменный «volt» лайм GLEBSBP
+    onPrimary = Color(0xFF2E3500),
+    primaryContainer = Color(0xFF434D00),
+    onPrimaryContainer = Color(0xFFE3FF9B),
+    secondary = Color(0xFFC6CCA0),
+    onSecondary = Color(0xFF2F3414),
+    secondaryContainer = Color(0xFF454B29),
+    onSecondaryContainer = Color(0xFFE3E8B8),
+    tertiary = Color(0xFFA3D9B7),
+    onTertiary = Color(0xFF063925),
+    tertiaryContainer = Color(0xFF21503B),
+    onTertiaryContainer = Color(0xFFBEEFD1),
+    background = Color(0xFF121409),       // глубокий графит с зелёным подтоном
+    onBackground = Color(0xFFE5E5D4),
+    surface = Color(0xFF1A1D11),
+    onSurface = Color(0xFFE5E5D4),
+    surfaceVariant = Color(0xFF454839),
+    onSurfaceVariant = Color(0xFFC7C8B2),
+    outline = Color(0xFF91937F),
+    outlineVariant = Color(0xFF454839),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    inverseSurface = Color(0xFFE5E5D4),
+    inverseOnSurface = Color(0xFF303225),
+    inversePrimary = Color(0xFF4B5A10),
+    surfaceTint = Color(0xFFC2EE00),
 )
 
 private val IndigoLightColorScheme = lightColorScheme(
@@ -191,6 +254,7 @@ private val ForestDarkColorScheme = darkColorScheme(
 
 private fun getAppColorScheme(palette: String, isDark: Boolean): androidx.compose.material3.ColorScheme {
     return when (palette) {
+        "gleb" -> if (isDark) GlebDarkColorScheme else GlebLightColorScheme
         "espresso" -> if (isDark) DarkColorScheme else LightColorScheme
         "forest" -> if (isDark) ForestDarkColorScheme else ForestLightColorScheme
         else -> if (isDark) IndigoDarkColorScheme else IndigoLightColorScheme
@@ -219,7 +283,7 @@ object GlebColors {
 fun GlebTheme(
     themeMode: String = "system",
     dynamicColor: Boolean = false,
-    themePalette: String = "indigo",
+    themePalette: String = "gleb",
     content: @Composable () -> Unit
 ) {
     val darkTheme = when (themeMode) {

@@ -186,7 +186,7 @@ class MainActivity : ComponentActivity() {
             val settingsStore = remember { SettingsStore(this) }
             val themeMode by settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = "system")
             val isDynamicColor by settingsStore.isDynamicColor.collectAsStateWithLifecycle(initialValue = false)
-            val themePalette by settingsStore.themePalette.collectAsStateWithLifecycle(initialValue = "indigo")
+            val themePalette by settingsStore.themePalette.collectAsStateWithLifecycle(initialValue = "gleb")
             val scope = rememberCoroutineScope()
 
             GlebTheme(themeMode = themeMode, dynamicColor = isDynamicColor, themePalette = themePalette) {
@@ -263,7 +263,7 @@ private data class NavItem(
 private val navItems = listOf(
     NavItem(0, "Туннель", Icons.Filled.VpnKey, Icons.Outlined.VpnKey),
     NavItem(1, "Серверы", Icons.Filled.Cloud, Icons.Outlined.Cloud),
-    NavItem(2, "Профили", Icons.Filled.FolderOpen, Icons.Outlined.Folder),
+    NavItem(2, "Подписки", Icons.Filled.FolderOpen, Icons.Outlined.Folder),
     NavItem(3, "Обход", Icons.Filled.FilterList, Icons.Outlined.FilterList),
     NavItem(4, "Логи", Icons.Filled.Terminal, Icons.Outlined.Terminal),
 )
@@ -276,7 +276,7 @@ fun MainScreen(
     onThemeChange: (String) -> Unit = {},
     isDynamicColor: Boolean = false,
     onDynamicColorChange: (Boolean) -> Unit = {},
-    currentPalette: String = "indigo",
+    currentPalette: String = "gleb",
     onPaletteChange: (String) -> Unit = {}
 ) {
     val unreadErrors by TunnelManager.unreadErrorCount.collectAsStateWithLifecycle()
@@ -568,12 +568,12 @@ fun MainScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Готовые профили",
+                        "Купить подписку",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "Вы можете получить готовые конфиги напрямую в этих Telegram-ботах:",
+                        "Подписка выдаётся автоматически после оплаты в официальном боте:",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Column(
@@ -603,7 +603,7 @@ fun MainScreen(
 
                         Button(
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/glebsbp_support"))
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/GLEBSPB_bot"))
                                 context.startActivity(intent)
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -615,7 +615,7 @@ fun MainScreen(
                             contentPadding = PaddingValues(vertical = 10.dp)
                         ) {
                             Text(
-                                "🤖 @sidylinkbot",
+                                "💬 Поддержка: @GLEBSPB_bot",
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.labelMedium
@@ -648,7 +648,7 @@ fun MainScreen(
                         Text("📢 @GLEBSBP", style = MaterialTheme.typography.labelLarge)
                     }
                     Text(
-                        "Просто скопируйте текст профиля или конфигурационный файл и импортируйте его на вкладке «Профили». Эта памятка также доступна в настройках.",
+                        "Просто скопируйте текст подписки или конфигурационный файл и импортируйте его на вкладке «Подписки». Эта памятка также доступна в настройках.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
