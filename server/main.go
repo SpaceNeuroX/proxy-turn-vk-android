@@ -86,6 +86,9 @@ func main() {
 	}()
 
 	initDB(*configDir, mainPasswordValue, *adminID, botTokenValue)
+	botTokenRef = botTokenValue
+	loadPaymentConfig(*configDir)
+	initInvoicesStore(*configDir)
 
 	keys, err := loadOrGenerateKeys(*configDir)
 	if err != nil {
@@ -111,6 +114,10 @@ func main() {
 	go statsLoop(ctx, *configDir)
 	go expiredPasswordJanitor(ctx, wgDev)
 	go botLoop(botTokenValue, *adminID, wgDev)
+	if anyPaymentEnabled() {
+		go paymentJanitorLoop()
+		log.Println("[PAY] Платёжные системы активны")
+	}
 
 	go func() {
 		mux := http.NewServeMux()
