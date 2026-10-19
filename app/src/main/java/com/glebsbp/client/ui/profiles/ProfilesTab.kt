@@ -206,7 +206,7 @@ fun ProfilesTab(
                             }
                         }
                     }
-                    Toast.makeText(context, "Профили успешно экспортированы", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Подписки успешно экспортированы", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(context, "Ошибка экспорта: ${e.message}", Toast.LENGTH_LONG).show()
                 }
@@ -299,7 +299,7 @@ fun ProfilesTab(
                             }
                         }
                     }
-                    Toast.makeText(context, "Импортировано профилей: $importedCount", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Импортировано подписок: $importedCount", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(context, "Ошибка импорта: ${e.message}", Toast.LENGTH_LONG).show()
                 }
@@ -511,7 +511,7 @@ fun ProfilesTab(
             onDismissRequest = { editorVisible = false },
             properties = androidx.compose.ui.window.DialogProperties(decorFitsSystemWindows = false),
             modifier = Modifier.imePadding(),
-            title = { Text(if (editingProfileId == null) "Новый профиль" else "Редактировать профиль") },
+            title = { Text(if (editingProfileId == null) "Новая подписка" else "Редактировать подписку") },
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -650,13 +650,13 @@ fun ProfilesTab(
             onDismissRequest = { deleteTarget = null },
             title = {
                 Text(
-                    text = "Удалить профиль?",
+                    text = "Удалить подписку?",
                     fontWeight = FontWeight.Bold,
                     style = MaterialTheme.typography.titleLarge
                 )
             },
             text = {
-                Text("Вы действительно хотите удалить профиль «${target.name}»?\n\nЭто действие нельзя будет отменить.")
+                Text("Вы действительно хотите удалить подписку «${target.name}»?\n\nЭто действие нельзя будет отменить.")
             },
             confirmButton = {
                 Button(
@@ -691,8 +691,8 @@ fun ProfilesTab(
             },
             text = {
                 Text(
-                    if (unbindOnlyCurrent) "Вы действительно хотите отвязать текущее устройство от этого профиля?"
-                    else "Вы действительно хотите сбросить ВСЕ привязанные устройства от этого профиля?\n\nЭто освободит все лимиты подключения."
+                    if (unbindOnlyCurrent) "Вы действительно хотите отвязать текущее устройство от этой подписки?"
+                    else "Вы действительно хотите сбросить ВСЕ привязанные устройства от этой подписки?\n\nЭто освободит все лимиты подключения."
                 )
             },
             confirmButton = {
@@ -746,13 +746,13 @@ fun ProfilesTab(
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Импорт профиля", fontWeight = FontWeight.Bold)
+                    Text("Импорт подписки", fontWeight = FontWeight.Bold)
                 }
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Найден новый профиль для импорта!",
+                        text = "Найдена новая подписка для импорта!",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -787,7 +787,7 @@ fun ProfilesTab(
                             ) {
                                 Text("⚠️", style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    text = "Хеш звонка ВКонтакте не указан. После сохранения добавьте его вручную в настройках профиля.",
+                                    text = "Хеш звонка ВКонтакте не указан. После сохранения добавьте его вручную в настройках подписки.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onTertiaryContainer
                                 )
@@ -796,7 +796,7 @@ fun ProfilesTab(
                     }
                     
                     Text(
-                        text = "Вы хотите сохранить его в список профилей?",
+                        text = "Вы хотите сохранить его в список подписок?",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -807,7 +807,7 @@ fun ProfilesTab(
                     onClick = {
                         scope.launch {
                             profilesStore.saveProfile(profile)
-                            Toast.makeText(context, "Профиль «${profile.name}» сохранен!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Подписка «${profile.name}» сохранена!", Toast.LENGTH_SHORT).show()
                             scannedProfile = null
                         }
                     },
@@ -853,7 +853,7 @@ fun ProfilesTab(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Найдено профилей: ${list.size}",
+                        text = "Найдено подписок: ${list.size}",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -882,13 +882,13 @@ fun ProfilesTab(
                     val isSubscriptionFolder = existingGroup != null && subscriptionGroupIds.contains(existingGroup.id)
                     if (isSubscriptionFolder) {
                         Text(
-                            text = "«${existingGroup!!.name}» — папка подписки. Добавлять профили вручную нельзя.",
+                            text = "«${existingGroup!!.name}» — папка подписки. Добавлять подписки вручную нельзя.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     } else if (existingGroup != null) {
                         Text(
-                            text = "Папка «${existingGroup.name}» уже есть — старые профили в ней будут заменены.",
+                            text = "Папка «${existingGroup.name}» уже есть — старые подписки в ней будут заменены.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -926,7 +926,7 @@ fun ProfilesTab(
                             Toast.makeText(
                                 context,
                                 if (replaced) "Папка «$finalName» заменена (${list.size} проф.)"
-                                else "Импортировано профилей: ${list.size}",
+                                else "Импортировано подписок: ${list.size}",
                                 Toast.LENGTH_SHORT
                             ).show()
                             scannedMultipleProfiles = null
@@ -1022,7 +1022,7 @@ fun ProfilesTab(
                         ) {
                             Text(
                                 "{\n" +
-                                "  \"name\": \"Имя профиля\",\n" +
+                                "  \"name\": \"Имя подписки\",\n" +
                                 "  \"peer\": \"IP_сервера\",\n" +
                                 "  \"password\": \"пароль\",\n" +
                                 "  \"hashes\": \"vk_хеши\",\n" +
@@ -1097,7 +1097,7 @@ fun ProfilesTab(
                 modifier = Modifier.weight(1f)
             ) {
                 Text(
-                    text = "Профили",
+                    text = "Подписки",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -1173,14 +1173,14 @@ fun ProfilesTab(
 
 
                         DropdownMenuItem(
-                            text = { Text("Экспорт всех профилей (ZIP)") },
+                            text = { Text("Экспорт всех подписок (ZIP)") },
                             onClick = {
                                 showMoreMenu = false
                                 exportZipLauncher.launch("glebsbp_profiles_export.zip")
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("Импорт профилей (ZIP)") },
+                            text = { Text("Импорт подписок (ZIP)") },
                             onClick = {
                                 showMoreMenu = false
                                 importZipLauncher.launch("application/zip")
@@ -1246,7 +1246,7 @@ fun ProfilesTab(
                         refreshingSubId = null
                         result.fold(
                             onSuccess = { count ->
-                                Toast.makeText(context, "Обновлено профилей: $count", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Обновлено подписок: $count", Toast.LENGTH_SHORT).show()
                             },
                             onFailure = { e ->
                                 Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1281,14 +1281,14 @@ fun ProfilesTab(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                     Text(
-                        text = "Пока нет сохранённых профилей",
+                        text = "Пока нет сохранённых подписок",
 
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Text(
-                        text = "Нажмите + внизу экрана, чтобы добавить профиль",
+                        text = "Нажмите + внизу экрана, чтобы добавить подписку",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1323,7 +1323,7 @@ fun ProfilesTab(
                             }
                             
                             Text(
-                                "Вы можете получить готовые профили напрямую в этих Telegram-ботах:",
+                                "Подписка выдаётся автоматически после оплаты в официальном боте:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1357,7 +1357,7 @@ fun ProfilesTab(
 
                                 Button(
                                     onClick = {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://t.me/glebsbp_support"))
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://t.me/GLEBSPB_bot"))
                                         context.startActivity(intent)
                                     },
                                     modifier = Modifier.fillMaxWidth(),
@@ -1370,7 +1370,7 @@ fun ProfilesTab(
                                     contentPadding = PaddingValues(vertical = 10.dp)
                                 ) {
                                     Text(
-                                        "🤖 @sidylinkbot",
+                                        "💬 Поддержка: @GLEBSPB_bot",
                                         maxLines = 1,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                         style = MaterialTheme.typography.labelSmall
@@ -1391,7 +1391,7 @@ fun ProfilesTab(
             ) {
                 Text(
                     text = if (isSubscriptionFilter) {
-                        "Профилей пока нет. Нажмите обновить на карточке подписки."
+                        "Подписок пока нет. Нажмите обновить на карточке подписки."
                     } else {
                         "Папка пуста"
                     },
@@ -1772,7 +1772,7 @@ fun ProfilesTab(
         if (profiles.isNotEmpty()) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "💡 Смахните профиль влево для удаления",
+                text = "💡 Смахните подписку влево для удаления",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 16.dp)
@@ -1881,7 +1881,7 @@ fun ProfilesTab(
                     Icon(Icons.Filled.RssFeed, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Подписка", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text("Профили по адресу JSON на сервере", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Подписки по адресу JSON на сервере", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(
@@ -1895,7 +1895,7 @@ fun ProfilesTab(
                     Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Вручную", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text("Создать новый профиль с нуля", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Создать новая подписка с нуля", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Row(
@@ -1994,7 +1994,7 @@ fun ProfilesTab(
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Сканировать QR-код", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text("Считать профиль с другого устройства", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Считать подписку с другого устройства", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -2046,7 +2046,7 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
     if (trimmed.startsWith("glebsbp://config") || trimmed.startsWith("glebsbp:config")) {
         try {
             val uri = android.net.Uri.parse(trimmed.replace("glebsbp:config", "glebsbp://config"))
-            val name = uri.getQueryParameter("name") ?: "QR Профиль"
+            val name = uri.getQueryParameter("name") ?: "QR-подписка"
             val peerRaw = uri.getQueryParameter("peer") ?: return null
             val dtlsPortParam = uri.getQueryParameter("dtls_port") ?: uri.getQueryParameter("server_port")
             val peer = if (dtlsPortParam != null) {
@@ -2086,7 +2086,7 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
     if (jsonStr.startsWith("{")) {
         try {
             val jsonObj = JSONObject(jsonStr)
-            val name = jsonObj.optString("name", "QR Профиль")
+            val name = jsonObj.optString("name", "QR-подписка")
             val peer = jsonObj.getString("peer")
             val hashes = jsonObj.optString("hashes", jsonObj.optString("vkHashes", ""))
             val workers = jsonObj.optInt("workers", jsonObj.optInt("workersPerHash", 18))

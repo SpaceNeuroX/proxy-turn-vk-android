@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ GLEBSBP — фирменная иконка: «G»-щит с молнией (volt) поверх тёмного графита.
+  -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Контур щита -->
+    <path
+        android:pathData="M54,22 L79,31 L79,55 C79,71 68,81.5 54,87 C40,81.5 29,71 29,55 L29,31 Z"
+        android:fillColor="#C2EE00"/>
+    <!-- Буква G -->
+    <path
+        android:pathData="M54,35.5 A18.5,18.5 0 1 0 72.5,54 L72.5,50.5 L57.5,50.5 L57.5,58.5 L64.5,58.5 L64.5,62.5 A10.5,10.5 0 1 1 64.5,45.5 L68.5,41.5 A18.5,18.5 0 0 0 54,35.5 Z"
+        android:fillColor="#121409"/>
+    <!-- Молния -->
+    <path
+        android:pathData="M58,40 L44,60 L52,60 L47,75 L63,53 L54.5,53 Z"
+        android:fillColor="#121409"/>
+</vector>

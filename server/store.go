@@ -136,7 +136,8 @@ func deliverPaidInvoice(invoiceID string) {
 			"📱 *Устройств:* %d\n\n"+
 			"🚀 *Быстрое подключение (открой на телефоне):*\n`%s`\n\n"+
 			"📄 Файл конфигурации — ниже 👇\n\n"+
-			"❓ Вопросы: напиши админу.",
+			"📢 Наш канал: https://t.me/glebsbp\n" +
+			"❓ Вопросы: напиши в бот @GLEBSPB_bot.",
 		title, newPass, expText, maxDevs, link)
 	sendTelegram(token, inv.TelegramID, txt, nil)
 
@@ -149,6 +150,20 @@ func deliverPaidInvoice(invoiceID string) {
   "password": "%s"
 }`, label, srvIP, hash, newPass)
 	sendTelegramFile(token, inv.TelegramID, fmt.Sprintf("glebsbp_%s.conf", newPass), []byte(configJSON))
+
+		// Кнопка «Открыть в приложении» — импорт подписки одним тапом.
+		openBtn := map[string]interface{}{
+			"inline_keyboard": [][]map[string]interface{}{
+				{{
+					"text": "📲 Открыть в приложении GLEBSBP",
+					"url":  link,
+				}},
+			},
+		}
+		sendTelegram(token, inv.TelegramID,
+			"👆 Нажми кнопку — Android откроет приложение GLEBSBP и импортирует подписку.\n\n"+
+				"⚠️ Если приложения ещё нет — установи его из канала: https://t.me/glebsbp",
+			openBtn)
 
 	// Уведомление админу о продаже
 	if adminIDStr := db.AdminID; adminIDStr != "" {
@@ -205,7 +220,8 @@ func sendStoreWelcome(token string, chatID int64) {
 	txt := "🛡 *GLEBSBP VPN* — быстрый и анонимный интернет.\n\n" +
 		"Выбери тариф и подключись за 1 минуту ⤵️\n\n" +
 		"🟢 Без логов\n🟢 Обфускация трафика\n🟢 До 5 устройств\n\n" +
-		"Оплата: 💳 карта (YooKassa), 🪙 крипта (USDT), ⭐ Telegram Stars."
+		"Оплата: 💳 карта (YooKassa), 🪙 крипта (USDT), ⭐ Telegram Stars.\n\n" +
+		"📢 Канал и приложение: https://t.me/glebsbp"
 	sendTelegram(token, chatID, txt, storeMenuKeyboard())
 }
 

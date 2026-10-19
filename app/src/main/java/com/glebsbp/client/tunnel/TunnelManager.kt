@@ -756,7 +756,7 @@ object TunnelManager {
                             )
                             updateLog(
                                 "wrap_timeout_hint",
-                                "[ПОДСКАЗКА] Проверьте пароль профиля, IP/порт сервера и что glebsbp-server запущен. " +
+                                "[ПОДСКАЗКА] Проверьте пароль подписки, IP/порт сервера и что glebsbp-server запущен. " +
                                     "Если VK режет UDP — попробуйте другую сеть или меньше потоков.",
                                 50,
                                 true
@@ -861,7 +861,7 @@ object TunnelManager {
                             }
                         }
 
-                        // Парсинг и инкрементальное сохранение трафика для активного профиля
+                        // Парсинг и инкрементальное сохранение трафика для активного подписки
                         val matchTraffic = Regex("Трафик:\\s*([\\d.,]+)").find(msg)
                         val currentTraffic = matchTraffic?.groupValues?.getOrNull(1)?.replace(",", ".")?.toDoubleOrNull()
                         if (currentTraffic != null) {
@@ -2097,7 +2097,7 @@ object TunnelManager {
         if (isBenignSocksIpv6Noise(line)) return null
         return when {
             lower.contains("wrap_auth_timeout") || lower.contains("dtls timeout") ->
-                "Сервер не ответил на WRAP/DTLS — проверьте пароль профиля, IP/порт VPS и что glebsbp-server запущен"
+                "Сервер не ответил на WRAP/DTLS — проверьте пароль подписки, IP/порт VPS и что glebsbp-server запущен"
             lower.contains("context canceled") ->
                 "Соединение прервано до handshake — часто сервер недоступен, UDP режет оператор или сменилась сеть"
             lower.contains("connection refused") ->

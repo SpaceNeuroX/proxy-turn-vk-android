@@ -77,7 +77,7 @@ fun AddSubscriptionDialog(
                     enabled = !saving
                 )
                 Text(
-                    "Вставьте ссылку — название и профили загрузятся автоматически.",
+                    "Вставьте ссылку — название и подписки загрузятся автоматически.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -112,7 +112,7 @@ fun DeleteSubscriptionDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Удалить подписку?") },
-        text = { Text("«${sub.name}» и папка с профилями будут удалены.") },
+        text = { Text("«${sub.name}» и папка с подпискими будут удалены.") },
         confirmButton = {
             Button(
                 onClick = onConfirm,

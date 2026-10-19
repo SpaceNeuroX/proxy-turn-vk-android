@@ -400,7 +400,7 @@ class SettingsStore(context: Context) {
 
     val themeMode: Flow<String> = dataStore.data.map { it[THEME_MODE] ?: "system" }
     val isDynamicColor: Flow<Boolean> = dataStore.data.map { it[IS_DYNAMIC_COLOR] ?: false }
-    val themePalette: Flow<String> = dataStore.data.map { it[THEME_PALETTE] ?: "indigo" }
+    val themePalette: Flow<String> = dataStore.data.map { it[THEME_PALETTE] ?: "gleb" }
 
     val currentProfileId: Flow<String> = dataStore.data.map { it[CURRENT_PROFILE_ID] ?: "" }
     val currentProfileName: Flow<String> = dataStore.data.map { it[CURRENT_PROFILE_NAME] ?: "" }
