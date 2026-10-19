@@ -39,6 +39,13 @@
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
             </intent-filter>
+            <!-- Deep link: glebsbp://config?... (кнопка «Открыть в GLEBSBP» в боте) -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="glebsbp" />
+            </intent-filter>
             <!-- Открытие .glebsbp файлов -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

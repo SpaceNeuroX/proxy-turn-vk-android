@@ -132,6 +132,9 @@ class MainActivity : ComponentActivity() {
         // URI файла .glebsbp, ожидающего импорта
         val pendingFileUri = mutableStateOf<Uri?>(null)
 
+        // Deep-ссылка glebsbp://..., ожидающая импорта (из бота)
+        val pendingDeepLink = mutableStateOf<String?>(null)
+
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -145,8 +148,12 @@ class MainActivity : ComponentActivity() {
             AppShortcuts.ACTION_START_TUNNEL -> startTunnelFromShortcut()
             AppShortcuts.ACTION_STOP_TUNNEL -> TunnelControl.stop(applicationContext)
             Intent.ACTION_VIEW -> {
-                val uri = intent.data
-                if (uri != null) {
+                val uri = intent.data ?: return
+                // Deep-ссылки вида glebsbp://... читаем напрямую как текст,
+                // contentResolver для них не работает.
+                if (uri.scheme == "glebsbp") {
+                    pendingDeepLink.value = uri.toString()
+                } else {
                     pendingFileUri.value = uri
                 }
             }
@@ -331,8 +338,9 @@ fun MainScreen(
     }
 
     val pendingFileUri = MainActivity.pendingFileUri.value
-    LaunchedEffect(pendingFileUri) {
-        if (pendingFileUri != null) {
+    val pendingDeepLink = MainActivity.pendingDeepLink.value
+    LaunchedEffect(pendingFileUri, pendingDeepLink) {
+        if (pendingFileUri != null || pendingDeepLink != null) {
             selectedTab = 2
         }
     }
@@ -527,7 +535,11 @@ fun MainScreen(
                         2 -> ProfilesTab(
                             onProfileApplied = { selectedTab = 0 },
                             importFileUri = MainActivity.pendingFileUri.value,
-                            onImportHandled = { MainActivity.pendingFileUri.value = null },
+                            importDeepLink = MainActivity.pendingDeepLink.value,
+                            onImportHandled = {
+                                MainActivity.pendingFileUri.value = null
+                                MainActivity.pendingDeepLink.value = null
+                            },
                             requestCreateProfile = requestCreateProfile,
                             onCreateProfileHandled = { requestCreateProfile = false }
                         )

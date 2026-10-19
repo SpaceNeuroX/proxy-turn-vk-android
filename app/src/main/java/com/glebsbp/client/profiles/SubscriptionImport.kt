@@ -55,8 +55,17 @@ object SubscriptionImport {
         val trimmed = rawText.trim()
         if (trimmed.isEmpty()) return null
 
+        // Deep-ссылки любых поддерживаемых схем обрабатываем напрямую,
+        // не пытаясь декодировать их как base64.
+        val uriPrefixes = listOf("glebsbp:", "wdtt:", "qwdtt:")
+        if (uriPrefixes.any { trimmed.startsWith(it) }) {
+            val normalized = normalizeConfigUri(trimmed) ?: return null
+            val single = parseGlebsbpUri(normalized) ?: return null
+            return ParsedRemoteSubscription(profiles = listOf(single), subscriptionName = single.name)
+        }
+
         var jsonStr = trimmed
-        if (!trimmed.startsWith("[") && !trimmed.startsWith("{") && !trimmed.startsWith("glebsbp:")) {
+        if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
             try {
                 val decoded = android.util.Base64.decode(trimmed, android.util.Base64.DEFAULT)
                 jsonStr = String(decoded, Charsets.UTF_8).trim()
@@ -162,6 +171,33 @@ object SubscriptionImport {
             groupId = "",
             useGlobalHashes = hashes.isBlank()
         )
+    }
+
+    private fun normalizeConfigUri(trimmed: String): String? {
+        // Поддерживаем новые и старые схемы: glebsbp://, wdtt://, qwdtt://
+        val legacySchemes = listOf("glebsbp://", "wdtt://", "qwdtt://")
+        val prefix = legacySchemes.firstOrNull { trimmed.startsWith(it) } ?: return null
+
+        // Старый компактный формат: <scheme>IP:dtls:wg:local:pass:hash
+        if (!trimmed.startsWith(prefix + "config")) {
+            val parts = trimmed.removePrefix(prefix).split(":")
+            if (parts.size >= 6) {
+                val ip = parts[0]
+                val passEnc = java.net.URLEncoder.encode(parts[4], "UTF-8")
+                val hashEnc = java.net.URLEncoder.encode(parts.drop(5).joinToString(":"), "UTF-8")
+                return prefix + "config?name=GLEBSBP " + java.net.URLEncoder.encode(ip, "UTF-8") +
+                    "&peer=" + ip + ":" + parts[1] + "&port=" + parts[3] +
+                    "&pass=" + passEnc + "&hashes=" + hashEnc
+            }
+            return null
+        }
+
+        // Новый формат ?key=value — нормализуем схему к glebsbp://
+        return when (prefix) {
+            "wdtt://" -> "glebsbp://" + trimmed.removePrefix("wdtt://")
+            "qwdtt://" -> "glebsbp://" + trimmed.removePrefix("qwdtt://")
+            else -> trimmed
+        }
     }
 
     private fun parseGlebsbpUri(trimmed: String): ConnectionProfile? {

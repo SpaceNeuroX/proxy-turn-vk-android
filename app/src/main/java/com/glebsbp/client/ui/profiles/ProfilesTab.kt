@@ -119,6 +119,7 @@ import androidx.compose.ui.platform.LocalDensity
 fun ProfilesTab(
     onProfileApplied: () -> Unit = {},
     importFileUri: android.net.Uri? = null,
+    importDeepLink: String? = null,
     onImportHandled: () -> Unit = {},
     requestCreateProfile: Boolean = false,
     onCreateProfileHandled: () -> Unit = {}
@@ -406,6 +407,26 @@ fun ProfilesTab(
                 Toast.makeText(context, "Ошибка чтения файла: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    // Автообработка deep-ссылки glebsbp:// из бота (кнопка «Открыть в GLEBSBP»)
+    LaunchedEffect(importDeepLink) {
+        val link = importDeepLink?.trim() ?: return@LaunchedEffect
+        try {
+            val parsed = parseMultipleConfigs(link)
+            if (parsed != null) {
+                if (parsed.profiles.size == 1) {
+                    scannedProfile = parsed.profiles.first()
+                } else {
+                    scannedMultipleProfiles = parsed
+                }
+            } else {
+                Toast.makeText(context, "Неверный формат ссылки подписки", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Ошибка импорта ссылки: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+        onImportHandled()
     }
 
     // Автообработка URI если приложение открыли через файл
@@ -2016,11 +2037,50 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
     val trimmed = rawText.trim()
     if (trimmed.isEmpty()) return null
 
-    // 0. Try legacy original GLEBSBP scheme
-    if (trimmed.startsWith("glebsbp://")) {
+    // 1. URL scheme with parameters (glebsbp://config?..., wdtt://config?..., qwdtt://config?...)
+    if (trimmed.contains("://config") || trimmed.startsWith("glebsbp:config") ||
+        trimmed.startsWith("wdtt:config") || trimmed.startsWith("qwdtt:config")
+    ) {
         try {
-            // glebsbp://<server_ip>:<dtls_port>:<wg_port>:<local_port>:<password>:<vk_hash>
-            val parts = trimmed.removePrefix("glebsbp://").split(":")
+            val normalized = trimmed
+                .replaceFirst("wdtt://config", "glebsbp://config")
+                .replaceFirst("qwdtt://config", "glebsbp://config")
+                .replaceFirst("glebsbp:config", "glebsbp://config")
+                .replaceFirst("wdtt:config", "glebsbp://config")
+                .replaceFirst("qwdtt:config", "glebsbp://config")
+            val uri = android.net.Uri.parse(normalized)
+            val name = uri.getQueryParameter("name") ?: "QR-подписка"
+            val peerRaw = uri.getQueryParameter("peer") ?: return null
+            val dtlsPortParam = uri.getQueryParameter("dtls_port") ?: uri.getQueryParameter("server_port")
+            val peer = if (dtlsPortParam != null) {
+                PeerAddress.ensurePort(peerRaw, dtlsPortParam.toIntOrNull()?.coerceIn(1, 65535) ?: 56000)
+            } else {
+                peerRaw
+            }
+            val hashes = uri.getQueryParameter("hashes") ?: ""
+            val workers = uri.getQueryParameter("workers")?.toIntOrNull() ?: 18
+            val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 9000
+            val pass = uri.getQueryParameter("pass") ?: uri.getQueryParameter("password") ?: ""
+            return ConnectionProfile(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                peer = peer,
+                vkHashes = hashes,
+                workersPerHash = workers,
+                listenPort = port,
+                password = pass
+            )
+        } catch (e: Exception) {
+            // fallback
+        }
+    }
+
+    // 2. Legacy compact scheme: <scheme>://IP:dtls:wg:local:pass:hash
+    val legacyPrefixes = listOf("glebsbp://", "wdtt://", "qwdtt://")
+    val legacyPrefix = legacyPrefixes.firstOrNull { trimmed.startsWith(it) }
+    if (legacyPrefix != null) {
+        try {
+            val parts = trimmed.removePrefix(legacyPrefix).split(":")
             if (parts.size >= 6) {
                 val ip = parts[0]
                 val dtlsPort = parts[1]
@@ -2042,37 +2102,8 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
         }
     }
 
-    // 1. Try URL scheme
-    if (trimmed.startsWith("glebsbp://config") || trimmed.startsWith("glebsbp:config")) {
-        try {
-            val uri = android.net.Uri.parse(trimmed.replace("glebsbp:config", "glebsbp://config"))
-            val name = uri.getQueryParameter("name") ?: "QR-подписка"
-            val peerRaw = uri.getQueryParameter("peer") ?: return null
-            val dtlsPortParam = uri.getQueryParameter("dtls_port") ?: uri.getQueryParameter("server_port")
-            val peer = if (dtlsPortParam != null) {
-                PeerAddress.ensurePort(peerRaw, dtlsPortParam.toIntOrNull()?.coerceIn(1, 65535) ?: 56000)
-            } else {
-                peerRaw
-            }
-            val hashes = uri.getQueryParameter("hashes") ?: ""
-            val workers = uri.getQueryParameter("workers")?.toIntOrNull() ?: 18
-            val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 9000
-            val pass = uri.getQueryParameter("pass") ?: ""
-            return ConnectionProfile(
-                id = UUID.randomUUID().toString(),
-                name = name,
-                peer = peer,
-                vkHashes = hashes,
-                workersPerHash = workers,
-                listenPort = port,
-                password = pass
-            )
-        } catch (e: Exception) {
-            // fallback
-        }
-    }
-
-    // 2. Try JSON (raw or base64)
+    // 3. Try JSON (raw or base64)
+    // 3. Try JSON (raw or base64)
     var jsonStr = trimmed
     if (!trimmed.startsWith("{")) {
         try {
