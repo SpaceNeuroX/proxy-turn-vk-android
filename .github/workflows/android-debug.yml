@@ -20,7 +20,7 @@ permissions:
 jobs:
   build-debug-apk:
     name: Build debug APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
