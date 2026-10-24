@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -117,44 +116,6 @@ func (n *NullLogger) Warnf(_ string, _ ...interface{})  {}
 func (n *NullLogger) Error(_ string)                    {}
 func (n *NullLogger) Errorf(_ string, _ ...interface{}) {}
 
-// connectedUDPConn — обёртка для connected UDP socket → PacketConn
-type connectedUDPConn struct{ *net.UDPConn }
-
-func (c *connectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) { return c.Write(p) }
-
-// dialTURNConn открывает сокет до TURN-сервера и оборачивает его в
-// net.PacketConn, которого ждёт turn.ClientConfig.Conn. По умолчанию — UDP
-// (как раньше). Если tcp=true, поднимает обычное TCP-соединение и
-// оборачивает его через turn.NewSTUNConn — это штатная, задокументированная
-// pion/turn возможность (см. examples/turn-client/tcp), а не самописный
-// протокол: NewSTUNConn сам разбирает STUN/ChannelData framing поверх
-// потокового TCP. Нужен на сетях (замечено на Ростелекоме), где UDP до
-// TURN-relay душится/дропается, а TCP до того же relay проходит — сравни
-// github.com/anton48/vk-turn-proxy-ios, который к той же VK/OK TURN-инфре
-// (calls.okcdn.ru) по умолчанию ходит именно через TCP.
-func dialTURNConn(turnAddr string, tcp bool) (net.PacketConn, io.Closer, error) {
-	if !tcp {
-		resolved, err := net.ResolveUDPAddr("udp", turnAddr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("резолв TURN: %w", err)
-		}
-		c, err := net.DialUDP("udp", nil, resolved)
-		if err != nil {
-			return nil, nil, fmt.Errorf("подключение TURN UDP: %w", err)
-		}
-		_ = c.SetReadBuffer(socketBufSize)
-		_ = c.SetWriteBuffer(socketBufSize)
-		return &connectedUDPConn{c}, c, nil
-	}
-
-	d := net.Dialer{Timeout: 10 * time.Second}
-	c, err := d.Dial("tcp", turnAddr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("подключение TURN TCP: %w", err)
-	}
-	return turn.NewSTUNConn(c), c, nil
-}
-
 func RunSession(
 	ctx context.Context,
 	tp *TurnParams,
@@ -175,33 +136,22 @@ func RunSession(
 	var firstWireWrite uint32
 	var firstWireRead uint32
 
-	if len(creds.TurnURLs) == 0 {
-		return false, fmt.Errorf("нет TURN URL в учетных данных")
-	}
-	selectedURL := creds.TurnURLs[sessionID%len(creds.TurnURLs)]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("разбор TURN URL %q: %w", selectedURL, err)
+		return false, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return false, err
 	}
 	defer turnConnCloser.Close()
 
-	if tp.TCPTransport {
-		log.Printf("[СЕССИЯ #%d] TURN TCP (%s)", sessionID, turnAddr)
+	if target.SNI != "" {
+		log.Printf("[СЕССИЯ #%d] TURN %s (%s, SNI %s)", sessionID, strings.ToUpper(target.Transport), turnAddr, target.SNI)
 	} else {
-		log.Printf("[СЕССИЯ #%d] TURN UDP (%s)", sessionID, turnAddr)
+		log.Printf("[СЕССИЯ #%d] TURN %s (%s)", sessionID, strings.ToUpper(target.Transport), turnAddr)
 	}
 
 	// RequestedAddressFamily
@@ -720,24 +670,13 @@ func RunPing(
 ) (int64, error) {
 	startPing := time.Now()
 
-	if len(creds.TurnURLs) == 0 {
-		return 0, fmt.Errorf("нет TURN URL")
-	}
-	selectedURL := creds.TurnURLs[0]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, 0)
 	if err != nil {
 		return 0, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return 0, err
 	}

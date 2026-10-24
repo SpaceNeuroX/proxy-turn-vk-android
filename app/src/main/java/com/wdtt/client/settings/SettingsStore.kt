@@ -52,8 +52,12 @@ class SettingsStore(context: Context) {
         private val SERVER_DIRECT_PORT = intPreferencesKey("server_direct_port")
         /** Порт сервера для raw-IP режима (на сервере нужен -listen-raw). */
         private val SERVER_RAW_PORT = intPreferencesKey("server_raw_port")
-        /** Соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях). */
+        /** Старая настройка (TCP вместо UDP), читается для миграции в TURN_TRANSPORT. */
         private val TURN_TCP_ENABLED = booleanPreferencesKey("turn_tcp_enabled")
+        /** Транспорт до TURN-relay VK: udp / tcp / tls. Заменяет TURN_TCP_ENABLED. */
+        private val TURN_TRANSPORT = stringPreferencesKey("turn_transport")
+        /** Свои TURN-адреса вместо адресов VK: IP или IP:порт через запятую. */
+        private val TURN_HOSTS = stringPreferencesKey("turn_hosts")
         private val SNI = stringPreferencesKey("sni")
 
         private val DEPLOY_IP = stringPreferencesKey("deploy_ip")
@@ -162,6 +166,23 @@ class SettingsStore(context: Context) {
         /** Нормализованный путь VK для Go-клиента. */
         fun normalizeVkAnonPath(path: String?): String {
             return if (path.equals("legacy", ignoreCase = true)) "legacy" else "vkcalls"
+        }
+
+        const val TURN_TRANSPORT_UDP = "udp"
+        const val TURN_TRANSPORT_TCP = "tcp"
+        const val TURN_TRANSPORT_TLS = "tls"
+
+        fun normalizeTurnTransport(transport: String?): String {
+            return when {
+                transport.equals(TURN_TRANSPORT_TCP, ignoreCase = true) -> TURN_TRANSPORT_TCP
+                transport.equals(TURN_TRANSPORT_TLS, ignoreCase = true) -> TURN_TRANSPORT_TLS
+                else -> TURN_TRANSPORT_UDP
+            }
+        }
+
+        /** Оставляет в списке своих TURN-адресов только символы адресов и разделители. */
+        fun sanitizeTurnHosts(input: String): String {
+            return input.filter { it.isLetterOrDigit() || it in ".:-[],; " }.take(512)
         }
 
         fun normalizeObfsMode(mode: String?): String {
@@ -328,8 +349,15 @@ class SettingsStore(context: Context) {
     val noDtlsEnabled: Flow<Boolean> = dataStore.data.map { it[NO_DTLS_ENABLED] ?: false }
     val serverDirectPort: Flow<Int> = dataStore.data.map { it[SERVER_DIRECT_PORT] ?: 56002 }
     val serverRawPort: Flow<Int> = dataStore.data.map { it[SERVER_RAW_PORT] ?: 56003 }
-    /** TURN-relay по TCP вместо UDP — обход UDP-душения на некоторых сетях (напр. Ростелеком). По умолчанию включено. */
-    val turnTcpEnabled: Flow<Boolean> = dataStore.data.map { it[TURN_TCP_ENABLED] ?: true }
+    /**
+     * Транспорт до TURN-relay VK. Пока пользователь не выбрал явно — берётся из
+     * старой настройки TURN_TCP_ENABLED (по умолчанию TCP).
+     */
+    val turnTransport: Flow<String> = dataStore.data.map { prefs ->
+        prefs[TURN_TRANSPORT]?.let { normalizeTurnTransport(it) }
+            ?: if (prefs[TURN_TCP_ENABLED] ?: true) TURN_TRANSPORT_TCP else TURN_TRANSPORT_UDP
+    }
+    val turnHosts: Flow<String> = dataStore.data.map { it[TURN_HOSTS] ?: "" }
     val sni: Flow<String> = dataStore.data.map { it[SNI] ?: "" }
 
     val deployIp: Flow<String> = dataStore.data.map { it[DEPLOY_IP] ?: "" }
@@ -586,8 +614,16 @@ class SettingsStore(context: Context) {
         dataStore.edit { prefs -> prefs[SERVER_RAW_PORT] = port.coerceIn(1, 65535) }
     }
 
-    suspend fun saveTurnTcpEnabled(enabled: Boolean) {
-        dataStore.edit { prefs -> prefs[TURN_TCP_ENABLED] = enabled }
+    suspend fun saveTurnTransport(transport: String) {
+        val normalized = normalizeTurnTransport(transport)
+        dataStore.edit { prefs ->
+            prefs[TURN_TRANSPORT] = normalized
+            prefs[TURN_TCP_ENABLED] = normalized != TURN_TRANSPORT_UDP
+        }
+    }
+
+    suspend fun saveTurnHosts(hosts: String) {
+        dataStore.edit { prefs -> prefs[TURN_HOSTS] = sanitizeTurnHosts(hosts).trim() }
     }
 
     suspend fun saveGlobalVkHashes(hashes: String) {

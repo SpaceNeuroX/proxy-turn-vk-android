@@ -176,7 +176,14 @@ fun SettingsTabContent(
     val savedSocksPassword by settingsStore.socksPassword.collectAsStateWithLifecycle(initialValue = "")
     var socksUsernameInput by rememberSaveable { mutableStateOf("") }
     var socksPasswordInput by rememberSaveable { mutableStateOf("") }
-    val turnTcpEnabled by settingsStore.turnTcpEnabled.collectAsStateWithLifecycle(initialValue = true)
+    val turnTransport by settingsStore.turnTransport.collectAsStateWithLifecycle(
+        initialValue = SettingsStore.TURN_TRANSPORT_TCP
+    )
+    val savedTurnHosts by settingsStore.turnHosts.collectAsStateWithLifecycle(initialValue = "")
+    var turnHostsInput by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(savedTurnHosts) {
+        turnHostsInput = savedTurnHosts
+    }
     val serverRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56003)
     var serverRawPortInput by rememberSaveable { mutableStateOf("56003") }
     LaunchedEffect(serverRawPort) {
@@ -1406,8 +1413,8 @@ fun SettingsTabContent(
                     }
 
                     // Применимо ко всем режимам — меняет только транспорт до
-                    // TURN-relay (TCP или UDP), сама TURN/RTP-obfs логика не
-                    // меняется. TCP по умолчанию.
+                    // TURN-relay VK (UDP, TCP или TLS), сама TURN/RTP-obfs
+                    // логика не меняется. TCP по умолчанию.
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             "TURN-транспорт",
@@ -1418,29 +1425,54 @@ fun SettingsTabContent(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            FilterChip(
-                                selected = turnTcpEnabled,
-                                onClick = {
-                                    if (!tunnelRunning) {
-                                        scope.launch { settingsStore.saveTurnTcpEnabled(true) }
-                                    }
-                                },
-                                label = { Text("TCP") },
-                                enabled = !tunnelRunning,
-                                modifier = Modifier.weight(1f)
-                            )
-                            FilterChip(
-                                selected = !turnTcpEnabled,
-                                onClick = {
-                                    if (!tunnelRunning) {
-                                        scope.launch { settingsStore.saveTurnTcpEnabled(false) }
-                                    }
-                                },
-                                label = { Text("UDP") },
-                                enabled = !tunnelRunning,
-                                modifier = Modifier.weight(1f)
-                            )
+                            listOf(
+                                SettingsStore.TURN_TRANSPORT_UDP to "UDP",
+                                SettingsStore.TURN_TRANSPORT_TCP to "TCP",
+                                SettingsStore.TURN_TRANSPORT_TLS to "TLS",
+                            ).forEach { (value, label) ->
+                                FilterChip(
+                                    selected = turnTransport == value,
+                                    onClick = {
+                                        if (!tunnelRunning) {
+                                            scope.launch { settingsStore.saveTurnTransport(value) }
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
+                        Text(
+                            when (turnTransport) {
+                                SettingsStore.TURN_TRANSPORT_UDP ->
+                                    "Самый быстрый. Если не подключается или скорость низкая — попробуйте TCP."
+                                SettingsStore.TURN_TRANSPORT_TLS ->
+                                    "Выглядит как обычный HTTPS к серверу VK. Для сетей, где режут UDP и TCP. " +
+                                        "Медленнее остальных; если VK не выдал TLS-адресов, используется TCP."
+                                else ->
+                                    "Помогает, если провайдер душит UDP (например, Ростелеком)."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = turnHostsInput,
+                            onValueChange = { value ->
+                                val clean = SettingsStore.sanitizeTurnHosts(value)
+                                turnHostsInput = clean
+                                scope.launch { settingsStore.saveTurnHosts(clean) }
+                            },
+                            label = { Text("Свои TURN-IP (необязательно)") },
+                            placeholder = { Text("1.2.3.4, 5.6.7.8:3478") },
+                            supportingText = {
+                                Text("Вместо адресов, которые выдаёт VK. Через запятую, порт можно не указывать.")
+                            },
+                            singleLine = true,
+                            enabled = !tunnelRunning,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                        )
                     }
 
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

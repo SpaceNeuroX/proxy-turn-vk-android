@@ -149,7 +149,8 @@ class TunnelService : Service() {
                             socksUsername = socksUsername,
                             socksPassword = socksPassword,
                             noDtls = noDtlsEnabled,
-                            turnTcp = store.turnTcpEnabled.first(),
+                            turnTransport = store.turnTransport.first(),
+                            turnHosts = store.turnHosts.first(),
                             detailedLogs = store.detailedLogs.first()
                         )
                         launch(Dispatchers.Main) {
@@ -232,7 +233,8 @@ class TunnelService : Service() {
                     socksUsername = store.socksUsername.first(),
                     socksPassword = store.socksPassword.first(),
                     noDtls = noDtlsEnabled,
-                    turnTcp = store.turnTcpEnabled.first(),
+                    turnTransport = store.turnTransport.first(),
+                    turnHosts = store.turnHosts.first(),
                     detailedLogs = store.detailedLogs.first()
                 )
                 if (params.peer.isNotEmpty() && params.vkHashes.isNotEmpty()) {

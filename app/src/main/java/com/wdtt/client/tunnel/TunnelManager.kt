@@ -483,9 +483,21 @@ object TunnelManager {
                     )
                 }
 
-                if (params.turnTcp) {
-                    cmd.add("-turn-tcp")
+                val turnTransport = SettingsStore.normalizeTurnTransport(params.turnTransport)
+                cmd.add("-turn-transport")
+                cmd.add(turnTransport)
+                val turnHosts = params.turnHosts.trim()
+                if (turnHosts.isNotEmpty()) {
+                    cmd.add("-turn")
+                    cmd.add(turnHosts)
                 }
+                updateLog(
+                    "turn_transport",
+                    "[СЕТЬ] TURN: ${turnTransport.uppercase()}" +
+                        if (turnHosts.isNotEmpty()) ", свои адреса: $turnHosts" else "",
+                    1,
+                    false
+                )
 
                 val mode = SettingsStore.normalizeConnectionMode(params.connectionMode)
                 cmd.add("-mode")
@@ -1867,7 +1879,8 @@ object TunnelManager {
             appendLine("Captcha: ${p.captchaMode}/${p.captchaSolveMethod}")
             appendLine("DNS: ${p.goDnsArg}")
             appendLine("Без DTLS: ${p.noDtls}")
-            appendLine("TURN по TCP: ${p.turnTcp}")
+            appendLine("TURN-транспорт: ${p.turnTransport}")
+            appendLine("Свои TURN-адреса: ${p.turnHosts.ifBlank { "нет" }}")
             append("Подробные логи: ${p.detailedLogs}")
         }
     }
@@ -2145,8 +2158,10 @@ data class TunnelParams(
     val socksPassword: String = "",
     /** Экспериментально: RTP-obfs AEAD без DTLS. Нужен сервер с -listen-direct, peer уже должен указывать на direct-порт. */
     val noDtls: Boolean = false,
-    /** TURN-relay по TCP вместо UDP — обход UDP-душения на некоторых сетях (напр. Ростелеком). */
-    val turnTcp: Boolean = false,
+    /** Транспорт до TURN-relay VK: udp / tcp / tls (TCP/TLS — обход UDP-душения, напр. Ростелеком). */
+    val turnTransport: String = SettingsStore.TURN_TRANSPORT_UDP,
+    /** Свои TURN-адреса вместо адресов VK (IP или IP:порт через запятую), пусто — адреса VK. */
+    val turnHosts: String = "",
     val detailedLogs: Boolean = false
 ) {
     /** Go поднимает локальный SOCKS5 (userspace WG) вместо Android GoBackend — верно и для socks, и для rawtun. */

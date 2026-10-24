@@ -160,7 +160,7 @@ func main() {
 		}
 	}()
 
-	host := flag.String("turn", "", "переопределить IP TURN")
+	host := flag.String("turn", "", "свои TURN-адреса вместо адресов VK: IP или IP:порт через запятую")
 	port := flag.String("port", "", "переопределить порт TURN")
 	listen := flag.String("listen", "127.0.0.1:9000", "локальный адрес")
 	vkHash := flag.String("vk", "", "хеши VK-звонков (через запятую)")
@@ -183,7 +183,8 @@ func main() {
 	socksUser := flag.String("socks-user", "", "логин SOCKS5")
 	socksPass := flag.String("socks-pass", "", "пароль SOCKS5")
 	noDTLS := flag.Bool("notls", false, "прямой режим: RTP-obfs AEAD без DTLS поверх TURN (нужен сервер с -listen-direct)")
-	turnTCP := flag.Bool("turn-tcp", false, "соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях, напр. Ростелеком)")
+	turnTCP := flag.Bool("turn-tcp", false, "то же, что -turn-transport tcp (оставлено для совместимости)")
+	turnTransport := flag.String("turn-transport", "", "транспорт до TURN-relay VK: udp, tcp или tls (по умолчанию udp, или tcp при -turn-tcp)")
 	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (только -mode rawtun)")
 
 	flag.Parse()
@@ -271,15 +272,20 @@ func main() {
 		*numW = (*numW / workersPerGroup) * workersPerGroup
 	}
 
+	activeTurnTransport := normalizeTurnTransport(*turnTransport)
+	if strings.TrimSpace(*turnTransport) == "" && *turnTCP {
+		activeTurnTransport = turnTransportTCP
+	}
+
 	tp := &TurnParams{
-		Host:         *host,
-		Port:         *port,
-		Hashes:       hashes,
-		WrapKey:      wrapKey,
-		ObfsMode:     normalizeObfsMode(*obfsMode),
-		NoDTLS:       *noDTLS,
-		RawMode:      activeConnMode == "rawtun",
-		TCPTransport: *turnTCP,
+		Hosts:     parseTurnHosts(*host),
+		Port:      *port,
+		Hashes:    hashes,
+		WrapKey:   wrapKey,
+		ObfsMode:  normalizeObfsMode(*obfsMode),
+		NoDTLS:    *noDTLS,
+		RawMode:   activeConnMode == "rawtun",
+		Transport: activeTurnTransport,
 	}
 
 	if *pingOnly {
@@ -342,10 +348,9 @@ func main() {
 	log.Printf("[КЛИЕНТ] Воркеров: %d (групп: %d, по %d)", *numW, numGroups, workersPerGroup)
 	log.Printf("[КЛИЕНТ] Хешей: %d", len(hashes))
 	log.Printf("[КЛИЕНТ] Слушаю: %s | Пир: %s", *listen, *peerAddr)
-	if *turnTCP {
-		log.Printf("[КЛИЕНТ] TURN-транспорт: TCP")
-	} else {
-		log.Printf("[КЛИЕНТ] TURN-транспорт: UDP")
+	log.Printf("[КЛИЕНТ] TURN-транспорт: %s", strings.ToUpper(tp.Transport))
+	if len(tp.Hosts) > 0 {
+		log.Printf("[КЛИЕНТ] Свои TURN-адреса: %s", strings.Join(tp.Hosts, ", "))
 	}
 	log.Printf("[КЛИЕНТ] Режим: %s", activeConnMode)
 	if activeConnMode == "socks" {

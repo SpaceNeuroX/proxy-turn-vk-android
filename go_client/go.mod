@@ -6,6 +6,7 @@ require (
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
+	github.com/bogdanfinn/utls v1.7.7-barnius
 	github.com/cbeuw/connutil v1.0.1
 	github.com/google/uuid v1.6.0
 	github.com/pion/dtls/v3 v3.1.5
@@ -23,7 +24,6 @@ require (
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
 	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
-	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect

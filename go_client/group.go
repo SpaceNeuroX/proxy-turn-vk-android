@@ -305,7 +305,9 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host     string
+	// Hosts: свои TURN-адреса (-turn), заменяют хост VK по кругу между
+	// сессиями — см. selectTurnTarget.
+	Hosts    []string
 	Port     string
 	Hashes   []string
 	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
@@ -317,11 +319,10 @@ type TurnParams struct {
 	// RawMode: raw-IP без WireGuard (см. server/main.go -listen-raw, handleConnRaw).
 	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
 	RawMode bool
-	// TCPTransport: соединяться с TURN-relay по TCP вместо UDP (см.
-	// dialTURNConn в session.go). На некоторых сетях (замечено на
-	// Ростелекоме) UDP до TURN душится/дропается провайдером агрессивнее,
-	// чем TCP на тот же relay — этот флаг обходит именно это.
-	TCPTransport bool
+	// Transport: как подключаться к TURN-relay VK — udp, tcp или tls (см.
+	// turn_endpoint.go). На некоторых сетях (замечено на Ростелекоме) UDP до
+	// TURN душится провайдером агрессивнее, чем TCP/TLS на тот же relay.
+	Transport string
 }
 
 // Credentials — учетные данные TURN
