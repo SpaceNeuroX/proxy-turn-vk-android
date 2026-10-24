@@ -319,9 +319,9 @@ type TurnParams struct {
 	// RawMode: raw-IP без WireGuard (см. server/main.go -listen-raw, handleConnRaw).
 	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
 	RawMode bool
-	// Transport: как подключаться к TURN-relay VK — udp, tcp или tls (см.
+	// Transport: как подключаться к TURN-relay VK — udp или tcp (см.
 	// turn_endpoint.go). На некоторых сетях (замечено на Ростелекоме) UDP до
-	// TURN душится провайдером агрессивнее, чем TCP/TLS на тот же relay.
+	// TURN душится провайдером агрессивнее, чем TCP на тот же relay.
 	Transport string
 }
 

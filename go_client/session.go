@@ -148,11 +148,7 @@ func RunSession(
 	}
 	defer turnConnCloser.Close()
 
-	if target.SNI != "" {
-		log.Printf("[СЕССИЯ #%d] TURN %s (%s, SNI %s)", sessionID, strings.ToUpper(target.Transport), turnAddr, target.SNI)
-	} else {
-		log.Printf("[СЕССИЯ #%d] TURN %s (%s)", sessionID, strings.ToUpper(target.Transport), turnAddr)
-	}
+	log.Printf("[СЕССИЯ #%d] TURN %s (%s)", sessionID, strings.ToUpper(target.Transport), turnAddr)
 
 	// RequestedAddressFamily
 	var addrFamily turn.RequestedAddressFamily

@@ -54,7 +54,7 @@ class SettingsStore(context: Context) {
         private val SERVER_RAW_PORT = intPreferencesKey("server_raw_port")
         /** Старая настройка (TCP вместо UDP), читается для миграции в TURN_TRANSPORT. */
         private val TURN_TCP_ENABLED = booleanPreferencesKey("turn_tcp_enabled")
-        /** Транспорт до TURN-relay VK: udp / tcp / tls. Заменяет TURN_TCP_ENABLED. */
+        /** Транспорт до TURN-relay VK: udp / tcp. Заменяет TURN_TCP_ENABLED. */
         private val TURN_TRANSPORT = stringPreferencesKey("turn_transport")
         /** Свои TURN-адреса вместо адресов VK: IP или IP:порт через запятую. */
         private val TURN_HOSTS = stringPreferencesKey("turn_hosts")
@@ -170,12 +170,11 @@ class SettingsStore(context: Context) {
 
         const val TURN_TRANSPORT_UDP = "udp"
         const val TURN_TRANSPORT_TCP = "tcp"
-        const val TURN_TRANSPORT_TLS = "tls"
-
+        /** "tls" из прошлой сборки становится TCP: VK не поддерживает TURN по TLS. */
         fun normalizeTurnTransport(transport: String?): String {
             return when {
                 transport.equals(TURN_TRANSPORT_TCP, ignoreCase = true) -> TURN_TRANSPORT_TCP
-                transport.equals(TURN_TRANSPORT_TLS, ignoreCase = true) -> TURN_TRANSPORT_TLS
+                transport.equals("tls", ignoreCase = true) -> TURN_TRANSPORT_TCP
                 else -> TURN_TRANSPORT_UDP
             }
         }

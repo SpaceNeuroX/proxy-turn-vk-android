@@ -2,13 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"math/big"
 	"net"
 	"reflect"
 	"testing"
@@ -18,20 +11,14 @@ import (
 	"github.com/pion/turn/v5"
 )
 
-func TestTurnURLsToAddressesKeepsTLSScheme(t *testing.T) {
+func TestTurnURLsToAddresses(t *testing.T) {
 	got := turnURLsToAddresses([]string{
 		"turn:1.2.3.4:3478?transport=udp",
-		"turn:1.2.3.4:3478?transport=tcp",
 		"turns:turn.example.com:443?transport=tcp",
 		"  ",
 		"5.6.7.8:3478",
 	})
-	want := []string{
-		"1.2.3.4:3478",
-		"1.2.3.4:3478",
-		"turns:turn.example.com:443",
-		"5.6.7.8:3478",
-	}
+	want := []string{"1.2.3.4:3478", "turn.example.com:443", "5.6.7.8:3478"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -49,9 +36,7 @@ func TestParseTurnHosts(t *testing.T) {
 }
 
 func TestNormalizeTurnTransport(t *testing.T) {
-	cases := map[string]string{
-		"": "udp", "udp": "udp", "TCP": "tcp", " tls ": "tls", "turns": "tls", "junk": "udp",
-	}
+	cases := map[string]string{"": "udp", "udp": "udp", "TCP": "tcp", " tcp ": "tcp", "tls": "udp", "junk": "udp"}
 	for in, want := range cases {
 		if got := normalizeTurnTransport(in); got != want {
 			t.Errorf("normalizeTurnTransport(%q) = %q, want %q", in, got, want)
@@ -60,7 +45,7 @@ func TestNormalizeTurnTransport(t *testing.T) {
 }
 
 func TestSelectTurnTarget(t *testing.T) {
-	vk := []string{"1.1.1.1:3478", "2.2.2.2:3478", "turns:turn.vk.example:443"}
+	vk := []string{"1.1.1.1:3478", "2.2.2.2:3478"}
 
 	tests := []struct {
 		name    string
@@ -70,58 +55,38 @@ func TestSelectTurnTarget(t *testing.T) {
 		want    turnTarget
 	}{
 		{
-			name: "udp rotates over plain VK addresses only",
+			name: "udp rotates over VK addresses",
 			tp:   TurnParams{Transport: "udp"}, entries: vk, idx: 1,
 			want: turnTarget{Addr: "2.2.2.2:3478", Transport: "udp"},
 		},
 		{
-			name: "tcp uses plain VK addresses",
+			name: "tcp",
 			tp:   TurnParams{Transport: "tcp"}, entries: vk, idx: 2,
 			want: turnTarget{Addr: "1.1.1.1:3478", Transport: "tcp"},
 		},
 		{
-			name: "tls picks turns address with VK domain as SNI",
-			tp:   TurnParams{Transport: "tls"}, entries: vk, idx: 5,
-			want: turnTarget{Addr: "turn.vk.example:443", SNI: "turn.vk.example", Transport: "tls"},
-		},
-		{
-			name: "tls without turns addresses falls back to tcp",
-			tp:   TurnParams{Transport: "tls"}, entries: vk[:2], idx: 0,
-			want: turnTarget{Addr: "1.1.1.1:3478", Transport: "tcp"},
-		},
-		{
 			name: "own hosts replace VK host, keep VK port",
-			tp:   TurnParams{Transport: "udp", Hosts: []string{"9.9.9.9", "8.8.8.8"}}, entries: vk, idx: 1,
+			tp:   TurnParams{Hosts: []string{"9.9.9.9", "8.8.8.8"}}, entries: vk, idx: 1,
 			want: turnTarget{Addr: "8.8.8.8:3478", Transport: "udp"},
 		},
 		{
 			name: "own host port wins over -port",
-			tp:   TurnParams{Transport: "udp", Hosts: []string{"9.9.9.9:19302"}, Port: "1000"}, entries: vk, idx: 0,
+			tp:   TurnParams{Hosts: []string{"9.9.9.9:19302"}, Port: "1000"}, entries: vk, idx: 0,
 			want: turnTarget{Addr: "9.9.9.9:19302", Transport: "udp"},
 		},
 		{
 			name: "-port overrides VK port",
-			tp:   TurnParams{Transport: "udp", Port: "1000"}, entries: vk, idx: 0,
+			tp:   TurnParams{Port: "1000"}, entries: vk, idx: 0,
 			want: turnTarget{Addr: "1.1.1.1:1000", Transport: "udp"},
 		},
 		{
-			name: "tls with own IP keeps VK domain as SNI",
-			tp:   TurnParams{Transport: "tls", Hosts: []string{"7.7.7.7"}}, entries: vk, idx: 0,
-			want: turnTarget{Addr: "7.7.7.7:443", SNI: "turn.vk.example", Transport: "tls"},
-		},
-		{
 			name: "own IPv6 host",
-			tp:   TurnParams{Transport: "udp", Hosts: []string{"[2001:db8::1]:443"}}, entries: vk, idx: 0,
-			want: turnTarget{Addr: "[2001:db8::1]:443", Transport: "udp"},
-		},
-		{
-			name: "only turns addresses in udp mode are still usable",
-			tp:   TurnParams{Transport: "udp"}, entries: []string{"turns:turn.vk.example:443"}, idx: 0,
-			want: turnTarget{Addr: "turn.vk.example:443", SNI: "turn.vk.example", Transport: "udp"},
+			tp:   TurnParams{Transport: "tcp", Hosts: []string{"[2001:db8::1]:443"}}, entries: vk, idx: 0,
+			want: turnTarget{Addr: "[2001:db8::1]:443", Transport: "tcp"},
 		},
 		{
 			name: "address without port gets default",
-			tp:   TurnParams{Transport: "udp"}, entries: []string{"1.1.1.1"}, idx: 0,
+			tp:   TurnParams{}, entries: []string{"1.1.1.1"}, idx: 0,
 			want: turnTarget{Addr: "1.1.1.1:3478", Transport: "udp"},
 		},
 	}
@@ -142,33 +107,13 @@ func TestSelectTurnTarget(t *testing.T) {
 	}
 }
 
-func selfSignedCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "turn.test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
-// TestTURNOverTLSRelaysData поднимает настоящий pion TURN-сервер на TLS и
-// проверяет весь путь клиента: uTLS-хендшейк, Allocate и обмен данными через
-// relay с UDP echo-сервером.
-func TestTURNOverTLSRelaysData(t *testing.T) {
+// TestTURNOverTCPRelaysData поднимает настоящий pion TURN-сервер на TCP и
+// проверяет весь путь клиента со своим TURN-адресом: Allocate и обмен данными
+// через relay с UDP echo-сервером.
+func TestTURNOverTCPRelaysData(t *testing.T) {
 	const user, pass, realm = "u", "p", "test"
 
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{selfSignedCert(t)}})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,12 +154,11 @@ func TestTURNOverTLSRelaysData(t *testing.T) {
 		}
 	}()
 
-	target, err := selectTurnTarget(&TurnParams{Transport: "tls"}, []string{"turns:" + ln.Addr().String()}, 0)
+	// Адрес от "VK" заведомо мёртвый — подключение должно пойти на свой адрес.
+	tp := &TurnParams{Transport: "tcp", Hosts: []string{ln.Addr().String()}}
+	target, err := selectTurnTarget(tp, []string{"192.0.2.1:3478"}, 0)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if target.Transport != turnTransportTLS {
-		t.Fatalf("transport = %q, want tls", target.Transport)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -243,11 +187,11 @@ func TestTURNOverTLSRelaysData(t *testing.T) {
 	}
 	relay, err := tc.Allocate()
 	if err != nil {
-		t.Fatalf("Allocate over TLS: %v", err)
+		t.Fatalf("Allocate over TCP: %v", err)
 	}
 	defer relay.Close()
 
-	msg := []byte("qwdtt over turns")
+	msg := []byte("qwdtt over turn tcp")
 	if _, err := relay.WriteTo(msg, echo.LocalAddr()); err != nil {
 		t.Fatal(err)
 	}
@@ -259,25 +203,5 @@ func TestTURNOverTLSRelaysData(t *testing.T) {
 	}
 	if string(buf[:n]) != string(msg) {
 		t.Fatalf("echo = %q, want %q", buf[:n], msg)
-	}
-}
-
-func TestDialTURNTLSRejectsPlainTCP(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		c, err := ln.Accept()
-		if err == nil {
-			_, _ = c.Write([]byte("not tls at all\r\n"))
-			c.Close()
-		}
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, _, err := dialTURNConn(ctx, turnTarget{Addr: ln.Addr().String(), Transport: turnTransportTLS}); err == nil {
-		t.Fatal("expected TLS handshake error")
 	}
 }

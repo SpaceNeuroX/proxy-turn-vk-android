@@ -2158,7 +2158,7 @@ data class TunnelParams(
     val socksPassword: String = "",
     /** Экспериментально: RTP-obfs AEAD без DTLS. Нужен сервер с -listen-direct, peer уже должен указывать на direct-порт. */
     val noDtls: Boolean = false,
-    /** Транспорт до TURN-relay VK: udp / tcp / tls (TCP/TLS — обход UDP-душения, напр. Ростелеком). */
+    /** Транспорт до TURN-relay VK: udp / tcp (TCP — обход UDP-душения, напр. Ростелеком). */
     val turnTransport: String = SettingsStore.TURN_TRANSPORT_UDP,
     /** Свои TURN-адреса вместо адресов VK (IP или IP:порт через запятую), пусто — адреса VK. */
     val turnHosts: String = "",

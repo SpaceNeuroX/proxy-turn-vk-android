@@ -184,7 +184,7 @@ func main() {
 	socksPass := flag.String("socks-pass", "", "пароль SOCKS5")
 	noDTLS := flag.Bool("notls", false, "прямой режим: RTP-obfs AEAD без DTLS поверх TURN (нужен сервер с -listen-direct)")
 	turnTCP := flag.Bool("turn-tcp", false, "то же, что -turn-transport tcp (оставлено для совместимости)")
-	turnTransport := flag.String("turn-transport", "", "транспорт до TURN-relay VK: udp, tcp или tls (по умолчанию udp, или tcp при -turn-tcp)")
+	turnTransport := flag.String("turn-transport", "", "транспорт до TURN-relay VK: udp или tcp (по умолчанию udp, или tcp при -turn-tcp)")
 	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (только -mode rawtun)")
 
 	flag.Parse()

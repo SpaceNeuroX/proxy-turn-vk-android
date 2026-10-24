@@ -1413,8 +1413,8 @@ fun SettingsTabContent(
                     }
 
                     // Применимо ко всем режимам — меняет только транспорт до
-                    // TURN-relay VK (UDP, TCP или TLS), сама TURN/RTP-obfs
-                    // логика не меняется. TCP по умолчанию.
+                    // TURN-relay VK (UDP или TCP), сама TURN/RTP-obfs логика
+                    // не меняется. TCP по умолчанию.
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             "TURN-транспорт",
@@ -1428,7 +1428,6 @@ fun SettingsTabContent(
                             listOf(
                                 SettingsStore.TURN_TRANSPORT_UDP to "UDP",
                                 SettingsStore.TURN_TRANSPORT_TCP to "TCP",
-                                SettingsStore.TURN_TRANSPORT_TLS to "TLS",
                             ).forEach { (value, label) ->
                                 FilterChip(
                                     selected = turnTransport == value,
@@ -1444,14 +1443,10 @@ fun SettingsTabContent(
                             }
                         }
                         Text(
-                            when (turnTransport) {
-                                SettingsStore.TURN_TRANSPORT_UDP ->
-                                    "Самый быстрый. Если не подключается или скорость низкая — попробуйте TCP."
-                                SettingsStore.TURN_TRANSPORT_TLS ->
-                                    "Выглядит как обычный HTTPS к серверу VK. Для сетей, где режут UDP и TCP. " +
-                                        "Медленнее остальных; если VK не выдал TLS-адресов, используется TCP."
-                                else ->
-                                    "Помогает, если провайдер душит UDP (например, Ростелеком)."
+                            if (turnTransport == SettingsStore.TURN_TRANSPORT_UDP) {
+                                "Самый быстрый. Если не подключается или скорость низкая — попробуйте TCP."
+                            } else {
+                                "Помогает, если провайдер душит UDP (например, Ростелеком)."
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1470,7 +1465,9 @@ fun SettingsTabContent(
                             },
                             singleLine = true,
                             enabled = !tunnelRunning,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
                             shape = RoundedCornerShape(14.dp),
                         )
                     }
