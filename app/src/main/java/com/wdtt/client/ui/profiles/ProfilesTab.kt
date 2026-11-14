@@ -499,7 +499,12 @@ fun ProfilesTab(
                         password = password,
                         trafficMb = existingTraffic,
                         groupId = existingGroupId,
-                        useGlobalHashes = useGlobal
+                        useGlobalHashes = useGlobal,
+                        // Ключ диагностики привязан к серверу: сменили сервер —
+                        // старый ключ больше не подходит.
+                        diagKey = existingProfile?.diagKey?.takeIf {
+                            PeerAddress.host(existingProfile.peer).equals(PeerAddress.host(peer), ignoreCase = true)
+                        } ?: ""
                     )
                 )
             }
@@ -2065,7 +2070,8 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
                 vkHashes = hashes,
                 workersPerHash = workers,
                 listenPort = port,
-                password = pass
+                password = pass,
+                diagKey = uri.getQueryParameter("dk").orEmpty().trim()
             )
         } catch (e: Exception) {
             // fallback
@@ -2099,7 +2105,8 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
                 vkHashes = hashes,
                 workersPerHash = workers,
                 listenPort = port,
-                password = pass
+                password = pass,
+                diagKey = jsonObj.optString("diagKey", jsonObj.optString("dk", "")).trim()
             )
         } catch (e: Exception) {
             // invalid json

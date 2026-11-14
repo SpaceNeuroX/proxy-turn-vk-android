@@ -15,6 +15,24 @@ const workersPerGroup = 9
 
 const allocateGateInterval = 100 * time.Millisecond
 
+// workerRetryDelay — пауза перед повтором упавшего потока: 0,5 с с
+// удвоением до 8 с плюс разброс, чтобы потоки не ломились разом. Раньше
+// было 5-15 с на любую ошибку, и поток, споткнувшийся на старте, выпадал
+// из набора на десяток секунд.
+func workerRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := 500 * time.Millisecond
+	for i := 1; i < attempt && d < 8*time.Second; i++ {
+		d *= 2
+	}
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d + time.Duration(rand.Intn(500))*time.Millisecond
+}
+
 // WorkerGroup:
 // Запускает 9 потоков с одними кредами. Ротации нет — работает до смерти воркеров.
 func WorkerGroup(
@@ -75,6 +93,7 @@ func WorkerGroup(
 	}
 
 	log.Printf("[ГРУППА #%d] Креды OK, TURN: %v, %d воркеров", groupID, creds.TurnURLs, len(workerIDs))
+	markDiagCredsReady()
 
 	var configRequestInFlight int32
 	var wg sync.WaitGroup
@@ -170,6 +189,7 @@ func WorkerGroup(
 				credsSnapshot.TurnURLs = cloneStringSlice(creds.TurnURLs)
 				credsMu.RUnlock()
 
+				sessStarted := time.Now()
 				configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
 					getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
 
@@ -246,7 +266,11 @@ func WorkerGroup(
 					return
 				}
 
-				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
+				// Поток поработал и упал — это новый сбой, а не серия неудач.
+				if time.Since(sessStarted) > 60*time.Second {
+					attempt = 1
+				}
+				retryDelay := workerRetryDelay(attempt)
 				if quotaRetry {
 					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
 				} else if fastRetry {

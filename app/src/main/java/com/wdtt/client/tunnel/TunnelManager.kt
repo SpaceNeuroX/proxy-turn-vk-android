@@ -109,6 +109,11 @@ object TunnelManager {
     val activeWorkers = MutableStateFlow(0)
     val isReconnecting = MutableStateFlow(false)
     val connectionPipeline = MutableStateFlow(ConnectionPipelineState())
+    /** Проверка соединения через VK (см. ConnectionDiagnostics, go_client/netdiag.go). */
+    val diagnostics = MutableStateFlow(DiagnosticsState())
+    @Volatile private var diagTriggerFile: java.io.File? = null
+    /** Проверку попросили до запуска процесса — триггер создаётся вместе с ним. */
+    @Volatile private var pendingManualDiag = false
     /** Плановый рестарт транспорта (смена сети): log reader не должен сбрасывать running. */
     @Volatile
     var transportRestartInProgress: Boolean = false
@@ -296,6 +301,7 @@ object TunnelManager {
         if (!isSwitching) {
             clearLogs()
             lastFatalError.value = null
+            diagnostics.value = DiagnosticsState(requested = pendingManualDiag)
             // Флаг обновится в startJob через first()/collect; пока — кэш.
             currentParams = params
             resetConnectionPipeline()
@@ -499,6 +505,27 @@ object TunnelManager {
                     false
                 )
 
+                // Проверка соединения через VK: сама, если туннель не
+                // поднимается, и по кнопке (файл-триггер, Go опрашивает его раз в секунду).
+                val triggerFile = java.io.File(appContext.cacheDir, "diag.trigger")
+                diagTriggerFile = triggerFile
+                if (pendingManualDiag) {
+                    pendingManualDiag = false
+                    runCatching { triggerFile.writeText("1") }
+                } else {
+                    runCatching { triggerFile.delete() }
+                }
+                cmd.add("-diag-trigger")
+                cmd.add(triggerFile.absolutePath)
+                if (params.diagPorts.isNotBlank()) {
+                    cmd.add("-diag-ports")
+                    cmd.add(params.diagPorts)
+                }
+                if (params.diagKey.isNotBlank()) {
+                    cmd.add("-diag-key")
+                    cmd.add(params.diagKey)
+                }
+
                 val mode = SettingsStore.normalizeConnectionMode(params.connectionMode)
                 cmd.add("-mode")
                 when {
@@ -648,6 +675,7 @@ object TunnelManager {
         transportRestartInProgress = false
         isConnecting.value = false
         markRunning(false)
+        interruptDiagnostics()
         if (stats.value == "Подключение…" ||
             stats.value.startsWith("VK:") ||
             stats.value == "Запуск туннеля…"
@@ -730,6 +758,18 @@ object TunnelManager {
 
                     // SOCKS IPv6: туннель только IPv4 — клиент сам уйдёт на A-запись.
                     if (isBenignSocksIpv6Noise(lineTrim)) {
+                        return@forEachLine
+                    }
+
+                    // Проверка соединения: машинные события и её же строки лога
+                    // разбираем здесь, до эвристик ниже (в тексте шагов бывают
+                    // «timeout», «refused» и т.п., которые не должны их запускать).
+                    if (lineTrim.startsWith(ConnectionDiagnostics.LINE_PREFIX)) {
+                        onDiagnosticsEvent(lineTrim)
+                        return@forEachLine
+                    }
+                    if (lineTrim.startsWith("[ДИАГ]")) {
+                        logDiagnosticsLine(lineTrim)
                         return@forEachLine
                     }
 
@@ -1234,12 +1274,79 @@ object TunnelManager {
                 }
                 if (process === observedProcess) {
                     process = null
+                    interruptDiagnostics()
                     if (!transportRestartInProgress) {
                         markRunning(false)
                     }
                 }
             }
         }
+    }
+
+    private fun onDiagnosticsEvent(line: String) {
+        val next = ConnectionDiagnostics.apply(diagnostics.value, line) ?: return
+        diagnostics.value = next
+        if (next.running || next.verdict == null) return
+        // Сервер прямо ответил, что пароль не подходит, — воркеры будут
+        // биться впустую. Останавливаемся с понятной причиной.
+        if (next.isFatalPasswordVerdict && activeWorkers.value <= 0) {
+            handleCriticalError("\uD83D\uDD12 ${next.verdict.title}. Воркеры остановлены.")
+        }
+    }
+
+    private fun logDiagnosticsLine(line: String) {
+        val text = line.removePrefix("[ДИАГ]").trim()
+        val key = when {
+            text.startsWith("═") -> "diag_head"
+            text.startsWith("Итог:") -> "diag_result"
+            else -> "diag_" + text.drop(2).substringBefore(':').trim().hashCode()
+        }
+        val isError = text.startsWith("✗") ||
+            (key == "diag_result" && diagnostics.value.verdict?.severity == DiagSeverity.ERROR)
+        updateLog(key, "[ДИАГ] $text", 3, isError)
+    }
+
+    /**
+     * Запустить проверку соединения. Если Go-процесс работает — сразу (через
+     * файл-триггер); если нет — вернёт false, и проверка стартует вместе со
+     * следующим подключением.
+     */
+    fun requestDiagnostics(): Boolean {
+        val proc = process
+        val trigger = diagTriggerFile
+        if (proc != null && proc.isAlive && trigger != null) {
+            val ok = runCatching { trigger.writeText("1") }.isSuccess
+            if (ok) diagnostics.value = diagnostics.value.copy(requested = true)
+            return ok
+        }
+        pendingManualDiag = true
+        diagnostics.value = DiagnosticsState(requested = true)
+        return false
+    }
+
+    /** Go-процесс ушёл посреди проверки — события `end` уже не будет. */
+    private fun interruptDiagnostics() {
+        pendingManualDiag = false
+        val d = diagnostics.value
+        if (!d.running && !d.requested) return
+        diagnostics.value = if (d.steps.isEmpty() && d.verdict == null) {
+            DiagnosticsState()
+        } else {
+            d.copy(
+                running = false,
+                requested = false,
+                finishedAtMs = System.currentTimeMillis(),
+                steps = d.steps.map {
+                    if (it.state == DiagStepState.RUNNING) it.copy(state = DiagStepState.SKIP, text = "прервано") else it
+                },
+            )
+        }
+    }
+
+    fun dismissDiagnostics() {
+        if (diagnostics.value.running) return
+        pendingManualDiag = false
+        diagnostics.value = DiagnosticsState()
     }
 
     private fun handleCriticalError(message: String) {
@@ -1301,7 +1408,15 @@ object TunnelManager {
                         lastActiveAtMs == 0L &&
                         !ManlCaptchaWebViewManager.isCaptchaPending
                     ) {
-                        handleCriticalError("\uD83D\uDD12 Неверный пароль подключения или несовместимый WRAP. Воркеры остановлены.")
+                        // Если проверка соединения уже назвала причину — говорим её,
+                        // а не гадаем про пароль.
+                        val diagVerdict = diagnostics.value.verdict
+                        val reason = if (diagVerdict != null && diagVerdict.severity != DiagSeverity.OK) {
+                            "${diagVerdict.title}. Воркеры остановлены."
+                        } else {
+                            "\uD83D\uDD12 Неверный пароль подключения или несовместимый WRAP. Воркеры остановлены."
+                        }
+                        handleCriticalError(reason)
                         return@launch
                     } else if (System.currentTimeMillis() - zeroWorkersSince > 90_000 && !ManlCaptchaWebViewManager.isCaptchaPending) {
                         updateLog("watchdog", "⚠ Зомби-процесс (0 воркеров 90с). Перезапуск...", 50, true)
@@ -1613,6 +1728,7 @@ object TunnelManager {
         markRunning(false)
         isConnecting.value = false
         activeWorkers.value = 0
+        interruptDiagnostics()
         // При ошибке шага оставляем схему с крестиком; иначе прячем.
         if (connectionPipeline.value.failed == null) {
             hideConnectionPipeline()
@@ -2162,7 +2278,11 @@ data class TunnelParams(
     val turnTransport: String = SettingsStore.TURN_TRANSPORT_UDP,
     /** Свои TURN-адреса вместо адресов VK (IP или IP:порт через запятую), пусто — адреса VK. */
     val turnHosts: String = "",
-    val detailedLogs: Boolean = false
+    val detailedLogs: Boolean = false,
+    /** Ключ диагностики сервера (dk= из ссылки), пусто — нет. */
+    val diagKey: String = "",
+    /** Порты сервера для проверки: "dtls=56000,direct=56002,raw=56003". */
+    val diagPorts: String = ""
 ) {
     /** Go поднимает локальный SOCKS5 (userspace WG) вместо Android GoBackend — верно и для socks, и для rawtun. */
     val isSocksMode: Boolean

@@ -114,6 +114,11 @@ type adminPasswordView struct {
 	DownBytes     int64    `json:"down_bytes"`
 	UpBytes       int64    `json:"up_bytes"`
 	ActiveDevices int      `json:"active_devices"`
+	// Для ссылок qwdtt://, которые приложение собирает само (см. bot_links.go).
+	// Старые версии приложения эти поля игнорируют.
+	DiagKey    string `json:"diag_key,omitempty"`
+	RawPort    int    `json:"raw_port,omitempty"`
+	DirectPort int    `json:"direct_port,omitempty"`
 }
 
 func toAdminPasswordView(pass string, entry *PasswordEntry) adminPasswordView {
@@ -147,6 +152,9 @@ func toAdminPasswordView(pass string, entry *PasswordEntry) adminPasswordView {
 		DownBytes:     entry.DownBytes,
 		UpBytes:       entry.UpBytes,
 		ActiveDevices: active,
+		DiagKey:       serverDiag.Token(),
+		RawPort:       serverDiag.Port("raw"),
+		DirectPort:    serverDiag.Port("direct"),
 	}
 }
 

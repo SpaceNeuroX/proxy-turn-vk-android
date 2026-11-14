@@ -151,7 +151,9 @@ class TunnelService : Service() {
                             noDtls = noDtlsEnabled,
                             turnTransport = store.turnTransport.first(),
                             turnHosts = store.turnHosts.first(),
-                            detailedLogs = store.detailedLogs.first()
+                            detailedLogs = store.detailedLogs.first(),
+                            diagKey = store.diagKey.first(),
+                            diagPorts = diagPortsArg(basePeer, serverDtlsPort, serverDirectPort, serverRawPort)
                         )
                         launch(Dispatchers.Main) {
                             startTunnel(
@@ -235,7 +237,9 @@ class TunnelService : Service() {
                     noDtls = noDtlsEnabled,
                     turnTransport = store.turnTransport.first(),
                     turnHosts = store.turnHosts.first(),
-                    detailedLogs = store.detailedLogs.first()
+                    detailedLogs = store.detailedLogs.first(),
+                    diagKey = store.diagKey.first(),
+                    diagPorts = diagPortsArg(basePeer, serverDtlsPort, serverDirectPort, serverRawPort)
                 )
                 if (params.peer.isNotEmpty() && params.vkHashes.isNotEmpty()) {
                     launch(Dispatchers.Main) {
@@ -287,6 +291,16 @@ class TunnelService : Service() {
         QuickToggleTileService.requestTileUpdate(applicationContext)
         AppShortcuts.refreshAsync(applicationContext)
         stopSelf()
+    }
+
+    /**
+     * Порты сервера для диагностики (go_client -diag-ports). Порт WG берём из
+     * адреса профиля, если он там есть (ссылки бота кладут реальный порт),
+     * иначе из настроек.
+     */
+    private fun diagPortsArg(basePeer: String, dtlsPort: Int, directPort: Int, rawPort: Int): String {
+        val dtls = PeerAddress.port(basePeer) ?: dtlsPort
+        return "dtls=$dtls,direct=$directPort,raw=$rawPort"
     }
 
     private fun setupNetworkCallback() {

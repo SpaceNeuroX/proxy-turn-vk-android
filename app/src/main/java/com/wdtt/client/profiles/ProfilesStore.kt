@@ -25,7 +25,9 @@ data class ConnectionProfile(
     val password: String,
     val trafficMb: Double = 0.0,
     val groupId: String = "",
-    val useGlobalHashes: Boolean = vkHashes.isBlank()
+    val useGlobalHashes: Boolean = vkHashes.isBlank(),
+    /** Ключ диагностики сервера (dk= из ссылки бота), пусто — нет. */
+    val diagKey: String = ""
 )
 
 data class ProfileGroup(
@@ -64,6 +66,7 @@ class ProfilesStore(context: Context) {
         private fun useGlobalHashesKey(id: String) = booleanPreferencesKey("profile_use_global_hashes_$id")
         private fun trafficKey(id: String) = androidx.datastore.preferences.core.doublePreferencesKey("profile_traffic_$id")
         private fun groupIdKey(id: String) = stringPreferencesKey("profile_group_id_$id")
+        private fun diagKeyKey(id: String) = stringPreferencesKey("profile_diag_key_enc_$id")
 
         private const val GROUPS_IDS_KEY = "groups_ids"
         private fun groupsIdsKey() = stringPreferencesKey(GROUPS_IDS_KEY)
@@ -103,7 +106,8 @@ class ProfilesStore(context: Context) {
                 val traffic = prefs[trafficKey(id)] ?: 0.0
                 val groupId = prefs[groupIdKey(id)] ?: ""
                 val useGlobal = prefs[useGlobalHashesKey(id)] ?: true
-                list.add(ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId, useGlobal))
+                val diagKey = secureStore.decrypt(prefs[diagKeyKey(id)] ?: "") ?: ""
+                list.add(ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId, useGlobal, diagKey))
             }
             list
         }
@@ -338,6 +342,11 @@ class ProfilesStore(context: Context) {
             prefs[trafficKey(profile.id)] = profile.trafficMb
             prefs[groupIdKey(profile.id)] = profile.groupId
             prefs[useGlobalHashesKey(profile.id)] = profile.useGlobalHashes
+            if (profile.diagKey.isBlank()) {
+                prefs.remove(diagKeyKey(profile.id))
+            } else {
+                prefs[diagKeyKey(profile.id)] = secureStore.encrypt(profile.diagKey)
+            }
         }
     }
 
@@ -366,6 +375,7 @@ class ProfilesStore(context: Context) {
             prefs.remove(useGlobalHashesKey(id))
             prefs.remove(trafficKey(id))
             prefs.remove(groupIdKey(id))
+            prefs.remove(diagKeyKey(id))
         }
     }
 
@@ -441,7 +451,8 @@ class ProfilesStore(context: Context) {
         val traffic = prefs[trafficKey(id)] ?: 0.0
         val groupId = prefs[groupIdKey(id)] ?: ""
         val useGlobal = prefs[useGlobalHashesKey(id)] ?: hashes.isBlank()
-        return ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId, useGlobal)
+        val diagKey = secureStore.decrypt(prefs[diagKeyKey(id)] ?: "") ?: ""
+        return ConnectionProfile(id, name, peer, hashes, workers, port, pass, traffic, groupId, useGlobal, diagKey)
     }
 
     suspend fun incrementProfileTraffic(id: String, additionalTrafficMb: Double) = withContext(Dispatchers.IO) {
@@ -485,6 +496,7 @@ class ProfilesStore(context: Context) {
         val peerWithPort = PeerAddress.ensurePort(p.peer, serverDtlsPort)
         settings.save(peerWithPort, finalHashes, "", p.workersPerHash, "udp", p.listenPort)
         settings.saveConnectionPassword(p.password)
+        settings.saveDiagKey(p.diagKey)
         settings.saveCurrentProfile(p.id, p.name)
     }
 }

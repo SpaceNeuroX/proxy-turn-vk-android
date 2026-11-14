@@ -160,7 +160,8 @@ object SubscriptionImport {
             password = pass,
             trafficMb = traffic.coerceAtLeast(0.0),
             groupId = "",
-            useGlobalHashes = hashes.isBlank()
+            useGlobalHashes = hashes.isBlank(),
+            diagKey = jsonObj.optString("diagKey", jsonObj.optString("dk", "")).trim()
         )
     }
 
@@ -181,7 +182,8 @@ object SubscriptionImport {
                 workersPerHash = workers,
                 listenPort = port,
                 password = pass,
-                useGlobalHashes = hashes.isBlank()
+                useGlobalHashes = hashes.isBlank(),
+                diagKey = uri.getQueryParameter("dk").orEmpty().trim()
             )
         } catch (_: Exception) {
             null

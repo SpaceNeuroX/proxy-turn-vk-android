@@ -28,12 +28,18 @@ class SettingsStore(context: Context) {
         const val VK_ACCOUNT_MAX_WORKERS = 4
         /** Потоков в одной группе Go-клиента (workersPerGroup). */
         const val WORKERS_PER_VK_GROUP = 9
-        const val MAX_VK_HASHES = 4
+        const val MAX_VK_HASHES = 6
+        /** Потолок потоков Go-клиента (go_client/main.go, maxWorkers). */
+        const val MAX_TOTAL_WORKERS = 108
 
-        /** Макс. потоков: 27 на каждый хеш (1→27, 2→54, 3→81, 4→108). */
+        /**
+         * Макс. потоков: 27 на каждый хеш (1→27, 2→54, 3→81, 4+→108).
+         * 5-6 хешей не поднимают потолок, а раскладывают те же потоки по
+         * большему числу звонков — меньше нагрузка и квота на каждый.
+         */
         fun maxAnonymousWorkers(hashCount: Int): Int {
             val n = hashCount.coerceIn(1, MAX_VK_HASHES)
-            return n * WORKERS_PER_VK_GROUP * 3
+            return (n * WORKERS_PER_VK_GROUP * 3).coerceAtMost(MAX_TOTAL_WORKERS)
         }
 
         private val Context.dataStore by preferencesDataStore("settings")
@@ -80,6 +86,8 @@ class SettingsStore(context: Context) {
         // ═══ Пароли и Управление ═══
         private val CONNECTION_PASSWORD = stringPreferencesKey("connection_password")
         private val CONNECTION_PASSWORD_ENCRYPTED = stringPreferencesKey("connection_password_encrypted")
+        /** Ключ диагностики сервера (dk= из ссылки) для текущего профиля. */
+        private val DIAG_KEY_ENCRYPTED = stringPreferencesKey("diag_key_encrypted")
         private val DEPLOY_MAIN_PASSWORD = stringPreferencesKey("deploy_main_password")
         private val DEPLOY_MAIN_PASSWORD_ENCRYPTED = stringPreferencesKey("deploy_main_password_encrypted")
         private val DEPLOY_ADMIN_ID = stringPreferencesKey("deploy_admin_id")
@@ -384,6 +392,9 @@ class SettingsStore(context: Context) {
     val connectionPassword: Flow<String> = dataStore.data.map {
         readSecret(it, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD)
     }
+    val diagKey: Flow<String> = dataStore.data.map {
+        readSecret(it, DIAG_KEY_ENCRYPTED, DIAG_KEY_ENCRYPTED)
+    }
     val deployMainPassword: Flow<String> = dataStore.data.map {
         readSecret(it, DEPLOY_MAIN_PASSWORD_ENCRYPTED, DEPLOY_MAIN_PASSWORD)
     }
@@ -686,6 +697,12 @@ class SettingsStore(context: Context) {
     suspend fun saveConnectionPassword(password: String) {
         dataStore.edit { prefs ->
             prefs.putSecret(CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD, password)
+        }
+    }
+
+    suspend fun saveDiagKey(key: String) {
+        dataStore.edit { prefs ->
+            prefs.putSecret(DIAG_KEY_ENCRYPTED, DIAG_KEY_ENCRYPTED, key.trim())
         }
     }
     

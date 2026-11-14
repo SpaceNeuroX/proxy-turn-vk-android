@@ -52,7 +52,8 @@ fun ExportProfileSheet(
         val peerEsc = URLEncoder.encode(exportPeer, "UTF-8")
         val hashesEsc = URLEncoder.encode(profile.vkHashes, "UTF-8")
         val passEsc = URLEncoder.encode(profile.password, "UTF-8")
-        "qwdtt://config?name=$nameEsc&peer=$peerEsc&hashes=$hashesEsc&workers=${profile.workersPerHash}&port=${profile.listenPort}&pass=$passEsc"
+        val dkPart = if (profile.diagKey.isNotBlank()) "&dk=" + URLEncoder.encode(profile.diagKey, "UTF-8") else ""
+        "qwdtt://config?name=$nameEsc&peer=$peerEsc&hashes=$hashesEsc&workers=${profile.workersPerHash}&port=${profile.listenPort}&pass=$passEsc$dkPart"
     }
 
     LaunchedEffect(link) {
@@ -69,16 +70,15 @@ fun ExportProfileSheet(
     ) { uri ->
         if (uri != null) {
             try {
-                val json = """
-                    {
-                        "name": "${profile.name.replace("\"", "\\\"")}",
-                        "peer": "${PeerAddress.ensurePort(profile.peer, serverDtlsPort).replace("\"", "\\\"")}",
-                        "vkHashes": "${profile.vkHashes.replace("\"", "\\\"")}",
-                        "workersPerHash": ${profile.workersPerHash},
-                        "listenPort": ${profile.listenPort},
-                        "password": "${profile.password.replace("\"", "\\\"")}"
-                    }
-                """.trimIndent()
+                val json = org.json.JSONObject().apply {
+                    put("name", profile.name)
+                    put("peer", PeerAddress.ensurePort(profile.peer, serverDtlsPort))
+                    put("vkHashes", profile.vkHashes)
+                    put("workersPerHash", profile.workersPerHash)
+                    put("listenPort", profile.listenPort)
+                    put("password", profile.password)
+                    if (profile.diagKey.isNotBlank()) put("diagKey", profile.diagKey)
+                }.toString(2)
                 context.contentResolver.openOutputStream(uri)?.use {
                     it.write(json.toByteArray())
                 }

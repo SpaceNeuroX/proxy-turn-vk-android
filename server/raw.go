@@ -515,7 +515,8 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 		// IPv4-пакета всегда 0x45 (версия 4, IHL 5) и никогда не 0xFF, так
 		// что разбор по первому байту безопасен для любой длины.
 		if nn > 0 && (*b)[0] == 0xFF {
-			continue // keepalive
+			answerKeepalive(clientConn, nn) // keepalive
+			continue
 		}
 		if strings.HasPrefix(string((*b)[:nn]), "DISCONNECT_RAW:") {
 			// Клиент явно сообщил об отключении — сразу освобождаем слот,

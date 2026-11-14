@@ -26,10 +26,11 @@ const (
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
 	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
-	// keepaliveInterval: 1с (как у референсного клиента) — агрессивнее держит
-	// TURN permission/NAT-маппинг "тёплым" на каждом из 18-108 relay-сокетов
-	// сессии, чем прежние 15с/5с.
-	keepaliveInterval = 10 * time.Second
+	// keepaliveInterval — держит TURN permission/NAT-маппинг тёплым и
+	// служит пульсом для проверки живости потока (liveness.go): сервер
+	// отвечает на каждый keepalive. Было 10 с; 5 с — чтобы мёртвый поток
+	// снимался за ~15 с, а не за полминуты.
+	keepaliveInterval = 5 * time.Second
 	// keepaliveMinSize/keepaliveMaxSize: keepalive-пакет теперь не
 	// фиксированного размера (было 1 байт постоянно) — случайная длина
 	// 25-44 байта имитирует "тишину" OPUS в реальном звонке; постоянный
@@ -95,8 +96,20 @@ func (c *obfsDirectConn) SetDeadline(t time.Time) error      { return c.relay.Se
 func (c *obfsDirectConn) SetReadDeadline(t time.Time) error  { return c.relay.SetReadDeadline(t) }
 func (c *obfsDirectConn) SetWriteDeadline(t time.Time) error { return c.relay.SetWriteDeadline(t) }
 
-// Handshake semaphore: limit to 3 concurrent DTLS handshakes
-var handshakeSem = make(chan struct{}, 3)
+// handshakeSem ограничивает одновременные DTLS-рукопожатия. Было 3: на
+// 18+ потоках рукопожатия шли тройками, а одно зависшее держало слот до
+// таймаута. Рукопожатие — несколько пакетов через VK и одна ECDSA-подпись,
+// так что 16 параллельно не нагружают даже слабый телефон.
+var handshakeSem = make(chan struct{}, 16)
+
+// dtlsHandshakeTimeout — сколько ждать рукопожатие. Через VK оно занимает
+// доли секунды; если за 20 с (с повтором полётов каждые 0,5 с) не прошло —
+// дальше ждать бесполезно, лучше переподключить поток. Было 50 с.
+const dtlsHandshakeTimeout = 20 * time.Second
+
+// dtlsFlightInterval — как часто DTLS повторяет потерянный полёт
+// (по умолчанию в pion 1 с).
+const dtlsFlightInterval = 500 * time.Millisecond
 
 // NullLoggerFactory подавляет логи pion
 type NullLoggerFactory struct{}
@@ -373,6 +386,7 @@ func RunSession(
 			CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 			ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
 			MTU:                   1100,
+			FlightInterval:        dtlsFlightInterval,
 			// No ServerName (SNI) — less detectable by DPI
 		}
 
@@ -382,7 +396,7 @@ func RunSession(
 			return false, fmt.Errorf("DTLS клиент: %w", err)
 		}
 
-		hctx, hcancel := context.WithTimeout(sessCtx, 50*time.Second)
+		hctx, hcancel := context.WithTimeout(sessCtx, dtlsHandshakeTimeout)
 		log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 		err = dtlsConn.HandshakeContext(hctx)
 		hcancel()
@@ -497,19 +511,34 @@ func RunSession(
 	// конкурирующая за conn с основным Writer'ом ниже) — кладётся в
 	// slot.PrioCh неблокирующе, тем же путём, что и мелкие ACK-пакеты, и
 	// уходит через единственную writer-горутину.
+	liveness := newSessionLiveness(time.Now())
 	go func() {
 		defer proxyWg.Done()
-		t := time.NewTicker(keepaliveInterval)
+		t := time.NewTicker(livenessTick)
 		defer t.Stop()
 
 		didBytes := make([]byte, 16)
 		copy(didBytes, deviceID)
+		nextKeepalive := time.Now().Add(keepaliveInterval)
 
 		for {
 			select {
 			case <-sessCtx.Done():
 				return
-			case <-t.C:
+			case now := <-t.C:
+				if silent, dead := liveness.silentFor(now); dead {
+					log.Printf("[ВОРКЕР #%d] Сервер не отвечает %d с — поток мёртв, переподключаем", sessionID, int(silent.Seconds()))
+					select {
+					case sessionErrCh <- fmt.Errorf("поток не отвечает %d с", int(silent.Seconds())):
+					default:
+					}
+					sessCancel()
+					return
+				}
+				if now.Before(nextKeepalive) {
+					continue
+				}
+				nextKeepalive = now.Add(keepaliveInterval)
 				size := keepaliveMinSize + rand.Intn(keepaliveMaxSize)
 				pkt := getPktBuf(size)
 				pkt[0] = keepaliveByte
@@ -613,10 +642,12 @@ func RunSession(
 				return
 			}
 
-			// Skip keepalive pong from server
+			// Ответ сервера на keepalive — пульс для проверки живости.
 			if n == 1 && b[0] == keepaliveByte {
+				liveness.notePong(time.Now())
 				continue
 			}
+			liveness.noteRx(time.Now())
 
 			if atomic.CompareAndSwapUint32(&firstWireRead, 0, 1) {
 				log.Printf("[ВОРКЕР #%d] [ДЕБАГ] Получен ПЕРВЫЙ пакет из соединения (%d байт)", sessionID, n)
@@ -798,6 +829,7 @@ func RunPing(
 		CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
 		MTU:                   1100,
+		FlightInterval:        dtlsFlightInterval,
 	}
 
 	dtlsConn, err := dtls.Client(pipeB, peer, dtlsCfg)

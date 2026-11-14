@@ -13,7 +13,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -780,7 +779,9 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 						pts := strings.Split(ports, ",")
 						srvIP := getPublicIP()
 						link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], pass, entry.VkHash)
-						txt += fmt.Sprintf("🔗 *Быстрая ссылка:* `%s`\n", link)
+						qwdttLink := buildQwdttLink(passwordEntryLabel(entry, pass, 0), srvIP, entry.VkHash, pass)
+						txt += fmt.Sprintf("🔗 *Ссылка qWDTT:* `%s`\n", qwdttLink)
+						txt += fmt.Sprintf("🔗 *Legacy ссылка:* `%s`\n", link)
 					}
 					if entry.IsDeactivated {
 						txt += "🔴 Статус: *ДЕАКТИВИРОВАН*\n"
@@ -941,18 +942,11 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					entry, exists := db.Passwords[pass]
 					if exists && entry != nil {
 						srvIP := getPublicIP()
-						configJSON := fmt.Sprintf(`{
-  "name": "qWDTT - %s",
-  "peer": "%s",
-  "vkHashes": "%s",
-  "workersPerHash": 9,
-  "listenPort": 9000,
-  "password": "%s"
-}`, srvIP, srvIP, entry.VkHash, pass)
+						configJSON := buildQwdttConf(passwordEntryLabel(entry, pass, 0), srvIP, entry.VkHash, pass)
 						dbMutex.Unlock()
 
 						fileName := fmt.Sprintf("qwdtt_%s.conf", pass)
-						sendTelegramFile(token, adminID, fileName, []byte(configJSON))
+						sendTelegramFile(token, adminID, fileName, configJSON)
 					} else {
 						dbMutex.Unlock()
 						sendTelegram(token, adminID, "❌ Пароль не найден", nil)
@@ -1139,25 +1133,15 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 					pts := strings.Split(tempPorts, ",")
 					link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], db.MainPassword, hash)
 
-					nameEsc := neturl.QueryEscape(fmt.Sprintf("qWDTT - Main (%s)", srvIP))
-					peerEsc := neturl.QueryEscape(srvIP)
-					hashesEsc := neturl.QueryEscape(hash)
-					passEsc := neturl.QueryEscape(db.MainPassword)
-					qwdttLink := fmt.Sprintf("qwdtt://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
+					mainName := fmt.Sprintf("qWDTT - Main (%s)", srvIP)
+					qwdttLink := buildQwdttLink(mainName, srvIP, hash, db.MainPassword)
 
 					msgText := fmt.Sprintf("🔗 *Ссылка для главного пароля:*\n`%s`\n\n🔗 *Быстрая ссылка qWDTT:* `%s`", link, qwdttLink)
 					sendTelegram(token, adminID, msgText, nil)
 
-					configJSON := fmt.Sprintf(`{
-  "name": "qWDTT - Main (%s)",
-  "peer": "%s",
-  "vkHashes": "%s",
-  "workersPerHash": 9,
-  "listenPort": 9000,
-  "password": "%s"
-}`, srvIP, srvIP, hash, db.MainPassword)
+					configJSON := buildQwdttConf(mainName, srvIP, hash, db.MainPassword)
 					fileName := fmt.Sprintf("qwdtt_main_%s.conf", srvIP)
-					sendTelegramFile(token, adminID, fileName, []byte(configJSON))
+					sendTelegramFile(token, adminID, fileName, configJSON)
 					continue
 				}
 
@@ -1208,30 +1192,19 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 				pts := strings.Split(tempPorts, ",")
 				link := fmt.Sprintf("wdtt://%s:%s:%s:%s:%s:%s", srvIP, pts[0], pts[1], pts[2], newPass, hash)
 
-				nameEsc := neturl.QueryEscape(newLabel)
-				peerEsc := neturl.QueryEscape(srvIP)
-				hashesEsc := neturl.QueryEscape(hash)
-				passEsc := neturl.QueryEscape(newPass)
-				qwdttLink := fmt.Sprintf("qwdtt://config?name=%s&peer=%s&hashes=%s&workers=9&port=9000&pass=%s", nameEsc, peerEsc, hashesEsc, passEsc)
+				qwdttLink := buildQwdttLink(newLabel, srvIP, hash, newPass)
 
 				msgText := fmt.Sprintf("👤 Имя: *%s*\n🔑 Новый пароль:\n`%s`\n\n⏰ Действует %d дн. (до %s)\n📱 Лимит: %d устройств\nОжидает первого подключения\n\n🔗 *Быстрая ссылка qWDTT:* `%s`\n\n🔗 *Legacy ссылка:* `%s`", newLabel, newPass, tempDays, expDate, tempMaxDevs, qwdttLink, link)
 				sendTelegram(token, adminID, msgText, nil)
 
-				configJSON := fmt.Sprintf(`{
-  "name": "%s",
-  "peer": "%s",
-  "vkHashes": "%s",
-  "workersPerHash": 9,
-  "listenPort": 9000,
-  "password": "%s"
-}`, newLabel, srvIP, hash, newPass)
+				configJSON := buildQwdttConf(newLabel, srvIP, hash, newPass)
 				fileName := fmt.Sprintf("qwdtt_%s.conf", newPass)
-				sendTelegramFile(token, adminID, fileName, []byte(configJSON))
+				sendTelegramFile(token, adminID, fileName, configJSON)
 				continue
 			}
 
 			if cmd == "/start" || cmd == "/help" {
-				sendTelegram(token, adminID, "🤖 *qWDTT VPN Manager*\n\n/new — Создать пароль\n/list — Список паролей", nil)
+				sendTelegram(token, adminID, "🤖 *qWDTT VPN Manager*\n\n/new — Создать пароль\n/list — Список паролей\n/diag — Что приходило от клиентов через VK", nil)
 
 			} else if strings.HasPrefix(cmd, "/new ") || cmd == "/new" {
 				args := strings.Fields(strings.TrimPrefix(cmd, "/new"))
@@ -1272,6 +1245,8 @@ func botLoop(token string, adminIDstr string, wgDev *device.Device) {
 
 			} else if cmd == "/list" {
 				sendPasswordList(token, adminID, wgDev)
+			} else if cmd == "/diag" {
+				sendTelegram(token, adminID, serverDiag.Report(), nil)
 			}
 		}
 	}

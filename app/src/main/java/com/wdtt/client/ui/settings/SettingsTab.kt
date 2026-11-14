@@ -31,6 +31,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.rounded.NetworkCheck
+import androidx.compose.runtime.snapshotFlow
+import com.wdtt.client.ConnectionDiagnostics
+import com.wdtt.client.DiagSeverity
+import com.wdtt.client.WDTTColors
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -231,6 +237,9 @@ fun SettingsTabContent(
     var serverDtlsPortInput by rememberSaveable { mutableStateOf("56000") }
     var serverWgPortInput by rememberSaveable { mutableStateOf("56001") }
     var showAppSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    val diagState by TunnelManager.diagnostics.collectAsStateWithLifecycle()
+    val diagActiveWorkers by TunnelManager.activeWorkers.collectAsStateWithLifecycle()
+    var showDiagSheet by rememberSaveable { mutableStateOf(false) }
     val openAppSettingsRequest by TunnelManager.openAppSettingsRequest.collectAsStateWithLifecycle()
     var lastHandledOpenSettings by rememberSaveable { mutableLongStateOf(0L) }
     LaunchedEffect(openAppSettingsRequest) {
@@ -529,12 +538,13 @@ fun SettingsTabContent(
         }
     }
 
-    fun requestVpnAndStart() {
+    /** switchToLogs=false — запуск из диагностики: пользователь смотрит на проверку, не уводим его в «Логи». */
+    fun requestVpnAndStart(switchToLogs: Boolean = true) {
         (context as? com.wdtt.client.MainActivity)?.requestNotificationPermissionIfNeeded()
         TunnelManager.beginConnecting()
         val proceed = {
             // Переключение на «Логи» только когда VPN уже выдан — иначе launcher вкладки уничтожается.
-            if (autoSwitchToLogs) {
+            if (autoSwitchToLogs && switchToLogs) {
                 onConnectRequested()
             }
             startTunnelService()
@@ -552,6 +562,68 @@ fun SettingsTabContent(
             TunnelManager.cancelConnectingIfNeeded()
             Toast.makeText(context, "VPN-разрешение недоступно", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** Перезапуск туннеля после смены настроек из диагностики. */
+    fun restartTunnelForDiagnostics() {
+        TunnelManager.scope.launch {
+            val wasActive = TunnelManager.running.value || TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value
+            if (wasActive) {
+                context.startService(Intent(context, TunnelService::class.java).apply { action = "STOP" })
+                delay(800)
+            }
+            withContext(Dispatchers.Main) { requestVpnAndStart(switchToLogs = false) }
+        }
+    }
+
+    fun runDiagnosticsAction(action: String) {
+        showDiagSheet = false
+        TunnelManager.dismissDiagnostics()
+        scope.launch {
+            when {
+                action == "switch_raw" || action == "switch_wg" -> {
+                    val target = if (action == "switch_raw") SettingsStore.CONNECTION_MODE_RAWTUN else SettingsStore.CONNECTION_MODE_VPN
+                    settingsStore.saveConnectionMode(target)
+                    // requestVpnAndStart берёт режим из состояния экрана — ждём, пока оно обновится.
+                    withTimeoutOrNull(2_000) { snapshotFlow { connectionMode }.first { it == target } }
+                    Toast.makeText(context, if (target == SettingsStore.CONNECTION_MODE_RAWTUN) "Режим: Raw" else "Режим: WG", Toast.LENGTH_SHORT).show()
+                }
+                action == "switch_tcp" || action == "switch_udp" -> {
+                    val transport = if (action == "switch_tcp") SettingsStore.TURN_TRANSPORT_TCP else SettingsStore.TURN_TRANSPORT_UDP
+                    settingsStore.saveTurnTransport(transport)
+                    Toast.makeText(context, "TURN через ${transport.uppercase()}", Toast.LENGTH_SHORT).show()
+                }
+                action.startsWith("use_turn:") -> {
+                    val host = action.substringAfter(':')
+                    settingsStore.saveTurnHosts(host)
+                    Toast.makeText(context, "TURN закреплён: $host. Снять можно в настройках сети.", Toast.LENGTH_LONG).show()
+                }
+            }
+            restartTunnelForDiagnostics()
+        }
+    }
+
+    fun runDiagnosticsNow() {
+        if (!TunnelManager.requestDiagnostics()) {
+            // Процесса нет — проверка стартует вместе с подключением.
+            requestVpnAndStart(switchToLogs = false)
+        }
+    }
+
+    if (showDiagSheet) {
+        val tunnelActive = tunnelRunning || tunnelConnecting || tunnelReconnecting
+        DiagnosticsSheet(
+            state = diagState,
+            tunnelActive = tunnelActive,
+            onRun = { runDiagnosticsNow() },
+            onAction = { runDiagnosticsAction(it) },
+            onCopy = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Проверка соединения qWDTT", ConnectionDiagnostics.reportText(diagState)))
+                Toast.makeText(context, "Отчёт скопирован — паролей и ключей в нём нет", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showDiagSheet = false },
+        )
     }
 
     // ═══ Dialogs ═══
@@ -1831,15 +1903,31 @@ fun SettingsTabContent(
                 color = MaterialTheme.colorScheme.primary
             )
             
-            // Иконка настроек (шестеренка)
-            IconButton(
-                onClick = { showAppSettingsDialog = true }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Настройки оформления и инфо",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Проверка соединения: цвет иконки — итог последней проверки.
+                val diagTint = when {
+                    diagState.running || diagState.requested -> MaterialTheme.colorScheme.primary
+                    diagState.verdict?.severity == DiagSeverity.ERROR -> MaterialTheme.colorScheme.error
+                    diagState.verdict?.severity == DiagSeverity.WARN -> WDTTColors.warning
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                IconButton(onClick = { showDiagSheet = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.NetworkCheck,
+                        contentDescription = "Проверка соединения",
+                        tint = diagTint
+                    )
+                }
+                // Иконка настроек (шестеренка)
+                IconButton(
+                    onClick = { showAppSettingsDialog = true }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Настройки оформления и инфо",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -2023,17 +2111,18 @@ fun SettingsTabContent(
                     enabled = !tunnelRunning,
                     modifier = Modifier.weight(1f)
                 )
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_SOCKS,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_SOCKS) }
-                        }
-                    },
-                    label = { Text("SOCKS5") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
+                // SOCKS5 на главном экране не предлагаем — его случайно
+                // включали вместо VPN. Выбирается в «Режиме подключения» ниже;
+                // если уже выбран — показываем, чтобы было видно, что активно.
+                if (connectionMode == SettingsStore.CONNECTION_MODE_SOCKS) {
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { Text("SOCKS5") },
+                        enabled = !tunnelRunning,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2112,6 +2201,19 @@ fun SettingsTabContent(
                     )
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = shouldShowDiagnosticsCard(diagState, diagActiveWorkers),
+            enter = expandVertically(tween(260)) + fadeIn(tween(260)),
+            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+        ) {
+            DiagnosticsCard(
+                state = diagState,
+                onOpen = { showDiagSheet = true },
+                onAction = { runDiagnosticsAction(it) },
+                onDismiss = { TunnelManager.dismissDiagnostics() },
+            )
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
@@ -2921,7 +3023,9 @@ fun HashesDialog(
                         Triple("1", h1) { v: String -> h1 = v },
                         Triple("2", h2) { v: String -> h2 = v },
                         Triple("3", h3) { v: String -> h3 = v },
-                        Triple("4", h4) { v: String -> h4 = v }
+                        Triple("4", h4) { v: String -> h4 = v },
+                        Triple("5", h5) { v: String -> h5 = v },
+                        Triple("6", h6) { v: String -> h6 = v }
                     ).take(SettingsStore.MAX_VK_HASHES).forEachIndexed { idx, (label, value, onChange) ->
                         HashSlotCard(
                             slot = idx + 1,

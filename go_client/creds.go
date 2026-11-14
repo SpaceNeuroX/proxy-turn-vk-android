@@ -278,8 +278,11 @@ func fetchVkCredsSerialized(ctx context.Context, link string, streamID int) (str
 	vkRequestMu.Lock()
 	defer vkRequestMu.Unlock()
 
-	// Throttle: 3-6 seconds between requests
-	minInterval := 3*time.Second + time.Duration(rand.Intn(3000))*time.Millisecond
+	// Запросы кредов к VK идут строго по одному (мьютекс выше) с короткой
+	// паузой между ними. Раньше пауза была 3-6 с, и каждая следующая группа
+	// из 9 потоков ждала её целиком — на 18-36 потоках это главная задержка
+	// набора. csqtt держит 0,1 с при тех же VK-лимитах; берём с запасом.
+	minInterval := 600*time.Millisecond + time.Duration(rand.Intn(400))*time.Millisecond
 	elapsed := time.Since(globalLastVkFetchTime)
 
 	if !globalLastVkFetchTime.IsZero() && elapsed < minInterval {
