@@ -24,10 +24,16 @@ const (
 	// пропущенных ответа на keepalive (keepaliveInterval = 5 с).
 	livenessTimeout = 15 * time.Second
 	livenessTick    = time.Second
+	// livenessFreezeGap — если между двумя тиками прошло больше, процесс
+	// был заморожен (сон телефона, Doze, заморозка фоновых приложений).
+	// Пока он стоял, ответы на keepalive прийти не могли, и это не смерть
+	// потока: даём ему новое окно, а не снимаем все потоки разом.
+	livenessFreezeGap = 5 * time.Second
 )
 
 type sessionLiveness struct {
 	lastRx   atomic.Int64 // unix ms последнего пакета от сервера (данные или ответ)
+	lastTick atomic.Int64 // unix ms последнего тика проверки
 	pongSeen atomic.Bool  // сервер умеет отвечать на keepalive
 }
 
@@ -44,6 +50,20 @@ func (l *sessionLiveness) noteRx(now time.Time) { l.lastRx.Store(now.UnixMilli()
 func (l *sessionLiveness) notePong(now time.Time) {
 	l.pongSeen.Store(true)
 	l.noteRx(now)
+}
+
+// tick вызывается на каждом тике проверки. true — между тиками был
+// провал (процесс стоял): окно тишины начинается заново с этого момента.
+// Время — по настенным часам, как и lastRx: они идут и во время сна
+// устройства, поэтому провал виден и при заморозке, и при suspend.
+func (l *sessionLiveness) tick(now time.Time) bool {
+	nowMs := now.UnixMilli()
+	prev := l.lastTick.Swap(nowMs)
+	if prev == 0 || time.Duration(nowMs-prev)*time.Millisecond <= livenessFreezeGap {
+		return false
+	}
+	l.lastRx.Store(nowMs)
+	return true
 }
 
 // silentFor — сколько поток молчит, и мёртв ли он по правилам выше.

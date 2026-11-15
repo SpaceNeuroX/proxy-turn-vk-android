@@ -526,6 +526,11 @@ func RunSession(
 			case <-sessCtx.Done():
 				return
 			case now := <-t.C:
+				if liveness.tick(now) {
+					// Процесс стоял (сон/Doze): тишина за это время — не
+					// смерть потока. Сразу проверяем его keepalive'ом.
+					nextKeepalive = now
+				}
 				if silent, dead := liveness.silentFor(now); dead {
 					log.Printf("[ВОРКЕР #%d] Сервер не отвечает %d с — поток мёртв, переподключаем", sessionID, int(silent.Seconds()))
 					select {
