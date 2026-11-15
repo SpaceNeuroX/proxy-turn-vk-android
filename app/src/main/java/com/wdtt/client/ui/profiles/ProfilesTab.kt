@@ -485,7 +485,7 @@ fun ProfilesTab(
         val name = nameInput.trim()
         val peer = peerInput.trim()
         val hashes = hashesInput.trim()
-        val workers = workersInput.toIntOrNull()?.coerceIn(1, 128) ?: 9
+        val workers = workersInput.toIntOrNull()?.coerceIn(1, SettingsStore.MAX_TOTAL_WORKERS) ?: 9
         val port = portInput.toIntOrNull()?.coerceIn(1, 65535) ?: 9000
         val password = passwordInput
         

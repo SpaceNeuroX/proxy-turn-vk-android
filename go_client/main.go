@@ -262,8 +262,8 @@ func main() {
 		log.Fatalf("[КЛИЕНТ] WRAP key derive: %v", err)
 	}
 
-	// Лимит воркеров
-	maxWorkers := 108
+	// Лимит воркеров: 27 на хеш × 6 хешей (SettingsStore.MAX_TOTAL_WORKERS).
+	maxWorkers := 162
 	if *numW > maxWorkers {
 		*numW = maxWorkers
 	}

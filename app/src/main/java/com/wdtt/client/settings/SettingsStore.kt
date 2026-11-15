@@ -30,13 +30,9 @@ class SettingsStore(context: Context) {
         const val WORKERS_PER_VK_GROUP = 9
         const val MAX_VK_HASHES = 6
         /** Потолок потоков Go-клиента (go_client/main.go, maxWorkers). */
-        const val MAX_TOTAL_WORKERS = 108
+        const val MAX_TOTAL_WORKERS = 162
 
-        /**
-         * Макс. потоков: 27 на каждый хеш (1→27, 2→54, 3→81, 4+→108).
-         * 5-6 хешей не поднимают потолок, а раскладывают те же потоки по
-         * большему числу звонков — меньше нагрузка и квота на каждый.
-         */
+        /** Макс. потоков: 27 на каждый хеш (1→27, 2→54 … 6→162). */
         fun maxAnonymousWorkers(hashCount: Int): Int {
             val n = hashCount.coerceIn(1, MAX_VK_HASHES)
             return (n * WORKERS_PER_VK_GROUP * 3).coerceAtMost(MAX_TOTAL_WORKERS)
