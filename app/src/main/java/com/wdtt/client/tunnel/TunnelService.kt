@@ -168,6 +168,7 @@ class TunnelService : Service() {
                 }
             }
             "STOP" -> stopTunnel()
+            "SWITCH_MODE" -> switchMode(intent.getStringExtra("connection_mode"))
             "DEPLOY_START" -> {
                 val notification = createNotification("Установка на сервер...", "DEPLOY_CANCEL", "Отменить")
                 startPersistentForeground(notification)
@@ -273,6 +274,33 @@ class TunnelService : Service() {
 
         TunnelManager.start(this, params, isSwitching = false, forceStart = forceStart)
         startStatsUpdater()
+    }
+
+    /**
+     * Смена режима (WG ↔ Raw) при включённом туннеле: сервис остаётся в
+     * foreground, туннель останавливается и сразу поднимается заново с
+     * сохранёнными настройками — как «Остановить» → «Подключить», но одним
+     * нажатием. SOCKS5 сюда не попадает: ему не нужен VPN, а обратному
+     * переходу нужно разрешение VPN — это делается обычной кнопкой.
+     */
+    private fun switchMode(rawMode: String?) {
+        val mode = SettingsStore.normalizeConnectionMode(rawMode ?: return)
+        if (mode == SettingsStore.CONNECTION_MODE_SOCKS) return
+        val current = TunnelManager.currentConnectionMode()
+        if (current == null || current == SettingsStore.CONNECTION_MODE_SOCKS) return
+        if (current == mode) return
+        val appContext = applicationContext
+        TunnelManager.scope.launch {
+            SettingsStore(appContext).saveConnectionMode(mode)
+            launch(Dispatchers.Main) {
+                val title = if (mode == SettingsStore.CONNECTION_MODE_RAWTUN) "Raw" else "WG"
+                updateJob?.cancel()
+                TunnelManager.stop(force = true)
+                TunnelManager.beginConnecting("Переключаемся на $title…")
+                updateNotification("Переключаемся на $title…")
+                onStartCommand(Intent(appContext, TunnelService::class.java).apply { action = "START_SAVED" }, 0, 0)
+            }
+        }
     }
 
     private fun stopTunnel() {

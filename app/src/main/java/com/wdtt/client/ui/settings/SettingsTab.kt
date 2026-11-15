@@ -2098,10 +2098,23 @@ fun SettingsTabContent(
             ConnectionModeSwitch(
                 options = quickModes,
                 selected = connectionMode,
-                enabled = !tunnelRunning,
+                // Во время работы туннеля смена режима переподключает его
+                // (TunnelService SWITCH_MODE). Пока идёт подключение — ждём его
+                // итога; из SOCKS5 на ходу не переключаем: нужен запрос VPN.
+                enabled = !tunnelConnecting && !tunnelReconnecting &&
+                    !(tunnelRunning && connectionMode == SettingsStore.CONNECTION_MODE_SOCKS),
                 onSelect = { mode ->
-                    if (!tunnelRunning && mode != SettingsStore.CONNECTION_MODE_SOCKS) {
-                        scope.launch { settingsStore.saveConnectionMode(mode) }
+                    if (mode != SettingsStore.CONNECTION_MODE_SOCKS) {
+                        if (tunnelRunning) {
+                            context.startService(
+                                Intent(context, TunnelService::class.java).apply {
+                                    action = "SWITCH_MODE"
+                                    putExtra("connection_mode", mode)
+                                }
+                            )
+                        } else if (!tunnelConnecting) {
+                            scope.launch { settingsStore.saveConnectionMode(mode) }
+                        }
                     }
                 },
             )

@@ -1790,6 +1790,10 @@ object TunnelManager {
         }
     }
 
+    /** Режим работающего туннеля (vpn / rawtun / socks) или null, если туннеля нет. */
+    fun currentConnectionMode(): String? =
+        currentParams?.connectionMode?.let { SettingsStore.normalizeConnectionMode(it) }
+
     fun reloadWireGuard() {
         if (running.value && currentParams?.isSocksMode != true) {
             scope.launch {
