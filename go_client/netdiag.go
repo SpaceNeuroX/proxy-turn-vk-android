@@ -733,6 +733,12 @@ func (cfg *diagConfig) diagnose(ctx context.Context, rep *diagReporter) diagVerd
 	rep.step("turn", diagRun, "Получаем relay…")
 	creds, err := cfg.Creds(ctx, false)
 	if err != nil {
+		if callErr, ok := asCallUnavailableError(err); ok {
+			rep.step("turn", diagFail, fmt.Sprintf("VK: ссылка на звонок недействительна (код %d)", callErr.Code))
+			return diagVerdict{Code: "vk_call_invalid", Sev: "error", Title: "Ссылка на звонок VK не работает",
+				Text:  "VK отвечает, что звонка нет или ссылка недействительна: звонок завершён или хеш устарел. Обновите VK-хеши или возьмите новую ссылку у администратора.",
+				Facts: withFact(facts, "error", shortErr(err))}
+		}
 		rep.step("turn", diagFail, "VK не выдал доступ к TURN: "+shortErr(err))
 		return diagVerdict{Code: "vk_creds", Sev: "error", Title: "VK не выдал доступ к TURN",
 			Text:  "Не удалось получить TURN-креды по ссылке на звонок. Проверьте VK-хеши (вкладка «Хеши») или решите капчу и подключитесь снова.",
@@ -1075,6 +1081,15 @@ func markDiagCredsReady() {
 	diagCredsReadyAt.CompareAndSwap(0, time.Now().UnixMilli())
 }
 
+// diagCredsFailedAt — когда группа впервые не получила креды (unix ms).
+// Если к этому моменту креды не получил никто, туннель не поднимется вовсе —
+// проверку запускаем сразу, не дожидаясь таймаута шага в приложении.
+var diagCredsFailedAt atomic.Int64
+
+func markDiagCredsFailed() {
+	diagCredsFailedAt.CompareAndSwap(0, time.Now().UnixMilli())
+}
+
 // diagLastDownlink — когда по туннелю последний раз пришли данные от
 // сервера (unix ms). Обновляет diagWatchdog.
 var diagLastDownlink atomic.Int64
@@ -1088,12 +1103,23 @@ func tunnelReceivingRecently() bool {
 
 const (
 	diagAutoAfterCreds = 15 * time.Second // без единого живого воркера после кредов
-	diagAutoAfterDrop  = 25 * time.Second // все воркеры упали после работы
-	diagAutoCooldown   = 3 * time.Minute
+	// Пауза после неудачи кредов: дать соседним группам шанс их получить.
+	diagAutoAfterCredsFail = 3 * time.Second
+	diagAutoAfterDrop      = 25 * time.Second // все воркеры упали после работы
+	diagAutoCooldown       = 3 * time.Minute
 )
 
 // diagWatchdog запускает проверку сам, когда туннель не поднимается, и по
 // запросу приложения (файл-триггер).
+// autoDiagAtStartup — пора ли запускать проверку, пока туннель ни разу не
+// поднимался: креды есть, а потоков нет 15 с; или креды не получил никто.
+func autoDiagAtStartup(now time.Time, readyMs, failedMs int64) bool {
+	if readyMs > 0 {
+		return now.Sub(time.UnixMilli(readyMs)) >= diagAutoAfterCreds
+	}
+	return failedMs > 0 && now.Sub(time.UnixMilli(failedMs)) >= diagAutoAfterCredsFail
+}
+
 func diagWatchdog(ctx context.Context, cfg *diagConfig, stats *Stats, pauseFlag *int32, auto bool, triggerFile string) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -1149,8 +1175,7 @@ func diagWatchdog(ctx context.Context, cfg *diagConfig, stats *Stats, pauseFlag 
 			continue
 		}
 		if !everUp {
-			ready := diagCredsReadyAt.Load()
-			if !startupDone && ready > 0 && now.Sub(time.UnixMilli(ready)) >= diagAutoAfterCreds {
+			if !startupDone && autoDiagAtStartup(now, diagCredsReadyAt.Load(), diagCredsFailedAt.Load()) {
 				startupDone = true
 				lastAuto = now
 				launch("auto")

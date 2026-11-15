@@ -108,6 +108,7 @@ func WorkerGroup(
 		creds = &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: credStreamID}
 	} else {
 		log.Printf("[ГРУППА #%d] Ошибка кредов: %v", groupID, err)
+		markDiagCredsFailed()
 		return
 	}
 

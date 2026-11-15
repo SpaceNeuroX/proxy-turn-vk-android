@@ -453,3 +453,25 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestAutoDiagAtStartup(t *testing.T) {
+	now := time.Now()
+	ms := func(ago time.Duration) int64 { return now.Add(-ago).UnixMilli() }
+	cases := []struct {
+		name          string
+		ready, failed int64
+		want          bool
+	}{
+		{"nothing yet", 0, 0, false},
+		{"creds ok, workers still coming", ms(5 * time.Second), 0, false},
+		{"creds ok, no workers for 15s", ms(16 * time.Second), 0, true},
+		{"creds failed just now", 0, ms(time.Second), false},
+		{"creds failed, nobody got them", 0, ms(4 * time.Second), true},
+		{"one group failed, another got creds", ms(5 * time.Second), ms(6 * time.Second), false},
+	}
+	for _, c := range cases {
+		if got := autoDiagAtStartup(now, c.ready, c.failed); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
