@@ -239,6 +239,7 @@ var diagStepTitles = map[string]string{
 	"ports":    "Другие порты сервера",
 	"relay":    "Выход VK в интернет",
 	"altrelay": "Другой TURN-сервер VK",
+	"legacy":   "Обычное подключение",
 }
 
 type diagReporter struct {
@@ -544,6 +545,10 @@ func (r *diagRelay) probe(ctx context.Context, dst *net.UDPAddr, k diagKeyRef, p
 // закрывает соединение relay→порт сразу после ответа на пробу; пакет,
 // пришедший в этот момент, теряется и спасается только повтором (~0.7 с).
 const diagSameDstGap = 220 * time.Millisecond
+
+// diagLegacyTimeout — сколько ждать обычного подключения к серверу, который
+// не отвечает на пробы (см. diagnose).
+const diagLegacyTimeout = 20 * time.Second
 
 // probeAnyKey шлёт пробу всеми ключами (с небольшим разносом) и возвращает
 // первый ответ; остальные пробы после ответа не отправляются.
@@ -909,6 +914,31 @@ func (cfg *diagConfig) diagnose(ctx context.Context, rep *diagReporter) diagVerd
 		return diagVerdict{Code: "server_old", Sev: "warn", Title: "Сервер не поддерживает проверку",
 			Text:  "Туннель работает, но сервер не отвечает на диагностические пробы — на нём старая версия wdtt-server. Обновите сервер, чтобы проверка могла называть причины сбоев.",
 			Facts: facts}
+	}
+
+	// Отдельная проверка (-diag, туннеля нет): сервер версии до 1.4.5 на
+	// пробы молчит, но подключиться к нему можно. Пробуем обычное
+	// DTLS-рукопожатие, как «пинг» профиля: удалось — сервер рабочий, просто
+	// старый; пароль при этом верный (иначе сервер не принял бы пакеты).
+	if len(alive) == 0 && cfg.TunnelReceiving == nil && cfg.Listener == "dtls" {
+		rep.step("legacy", diagRun, "Пробуем обычное подключение…")
+		lctx, lcancel := context.WithTimeout(ctx, diagLegacyTimeout)
+		rtt, lerr := RunPing(lctx, cfg.TP, cfg.Peer, creds)
+		lcancel()
+		if lerr == nil {
+			rep.step("server", diagSkip, "на пробы не отвечает — старая версия сервера")
+			if len(others) > 0 {
+				rep.step("ports", diagSkip, "старый сервер — проверить нельзя")
+			}
+			rep.step("legacy", diagOK, fmt.Sprintf("подключение работает, %d мс", rtt))
+			return diagVerdict{Code: "server_old", Sev: "warn", Title: "Сервер работает, но устарел",
+				Text:  "Подключиться можно, пароль верный. На сервере старая версия wdtt-server: она не отвечает на диагностические пробы, поэтому подробная проверка недоступна. Обновите сервер, чтобы проверка могла называть причины сбоев.",
+				Facts: withFact(withFact(facts, "rtt_ms", strconv.FormatInt(rtt, 10)), "legacy", "true")}
+		}
+		if ctx.Err() != nil {
+			return diagVerdict{Code: "cancelled", Sev: "warn", Title: "Проверка прервана", Facts: facts}
+		}
+		rep.step("legacy", diagFail, "не подключилось: "+shortErr(lerr))
 	}
 
 	if len(alive) > 0 {
