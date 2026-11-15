@@ -2085,45 +2085,26 @@ fun SettingsTabContent(
             // Компактный переключатель режима подключения прямо рядом с кнопкой
             // "Подключить" — тот же connectionMode, что и подробный блок "Режим
             // подключения" выше в списке настроек, просто на виду без прокрутки.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_VPN,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_VPN) }
-                        }
-                    },
-                    label = { Text("WG") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_RAWTUN,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_RAWTUN) }
-                        }
-                    },
-                    label = { Text("Raw") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
-                // SOCKS5 на главном экране не предлагаем — его случайно
-                // включали вместо VPN. Выбирается в «Режиме подключения» ниже;
-                // если уже выбран — показываем, чтобы было видно, что активно.
+            // SOCKS5 на главном экране не предлагаем — его случайно включали
+            // вместо VPN. Выбирается в «Режиме подключения» ниже; если уже
+            // выбран — показываем третьим сегментом, чтобы было видно, что активно.
+            val quickModes = buildList {
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_VPN, "WG", connectionModeIcons.getValue("wg")))
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_RAWTUN, "Raw", connectionModeIcons.getValue("raw")))
                 if (connectionMode == SettingsStore.CONNECTION_MODE_SOCKS) {
-                    FilterChip(
-                        selected = true,
-                        onClick = {},
-                        label = { Text("SOCKS5") },
-                        enabled = !tunnelRunning,
-                        modifier = Modifier.weight(1f)
-                    )
+                    add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_SOCKS, "SOCKS5", connectionModeIcons.getValue("socks")))
                 }
             }
+            ConnectionModeSwitch(
+                options = quickModes,
+                selected = connectionMode,
+                enabled = !tunnelRunning,
+                onSelect = { mode ->
+                    if (!tunnelRunning && mode != SettingsStore.CONNECTION_MODE_SOCKS) {
+                        scope.launch { settingsStore.saveConnectionMode(mode) }
+                    }
+                },
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
