@@ -546,6 +546,21 @@ func (r *diagRelay) probe(ctx context.Context, dst *net.UDPAddr, k diagKeyRef, p
 // пришедший в этот момент, теряется и спасается только повтором (~0.7 с).
 const diagSameDstGap = 220 * time.Millisecond
 
+// diagOldServerTitle — итог для сервера, который не умеет отвечать на пробы.
+const diagOldServerTitle = "Старая версия сервера — диагностика недоступна"
+
+// legacyCheckAddr — куда пробовать обычное подключение: порт WG сервера
+// (в режиме WG это и есть адрес профиля, в Raw/Direct — из -diag-ports).
+func (cfg *diagConfig) legacyCheckAddr() *net.UDPAddr {
+	if cfg.Listener == "dtls" {
+		return cfg.Peer
+	}
+	if port := cfg.Ports["dtls"]; port > 0 {
+		return &net.UDPAddr{IP: cfg.Peer.IP, Port: port, Zone: cfg.Peer.Zone}
+	}
+	return nil
+}
+
 // diagLegacyTimeout — сколько ждать обычного подключения к серверу, который
 // не отвечает на пробы (см. diagnose).
 const diagLegacyTimeout = 20 * time.Second
@@ -917,28 +932,36 @@ func (cfg *diagConfig) diagnose(ctx context.Context, rep *diagReporter) diagVerd
 	// живым, пока не упадёт.
 	if len(alive) == 0 && cfg.TunnelReceiving != nil && cfg.TunnelReceiving() {
 		rep.step("server", diagSkip, "сервер не отвечает на пробы, но данные по туннелю идут")
-		return diagVerdict{Code: "server_old", Sev: "warn", Title: "Сервер не поддерживает проверку",
-			Text:  "Туннель работает, но сервер не отвечает на диагностические пробы — на нём старая версия wdtt-server. Обновите сервер, чтобы проверка могла называть причины сбоев.",
+		return diagVerdict{Code: "server_old", Sev: "warn", Title: diagOldServerTitle,
+			Text:  "Туннель работает, но на сервере старая версия wdtt-server: она не отвечает на диагностические пробы. Обновите сервер, чтобы проверка могла называть причины сбоев.",
 			Facts: facts}
 	}
 
-	// Отдельная проверка (-diag, туннеля нет): сервер версии до 1.4.5 на
-	// пробы молчит, но подключиться к нему можно. Пробуем обычное
-	// DTLS-рукопожатие, как «пинг» профиля: удалось — сервер рабочий, просто
+	// Сервер версии до 1.4.5 на пробы молчит, но подключиться к нему можно.
+	// Пробуем обычное DTLS-рукопожатие на порт WG (он есть у любого сервера),
+	// как «пинг» профиля, в любом режиме: удалось — сервер рабочий, просто
 	// старый; пароль при этом верный (иначе сервер не принял бы пакеты).
-	if len(alive) == 0 && cfg.TunnelReceiving == nil && cfg.Listener == "dtls" {
-		rep.step("legacy", diagRun, "Пробуем обычное подключение…")
+	if legacyAddr := cfg.legacyCheckAddr(); len(alive) == 0 && legacyAddr != nil {
+		rep.step("legacy", diagRun, fmt.Sprintf("Пробуем обычное подключение (WG, порт %d)…", legacyAddr.Port))
 		lctx, lcancel := context.WithTimeout(ctx, diagLegacyTimeout)
-		rtt, lerr := RunPing(lctx, cfg.TP, cfg.Peer, creds)
+		ltp := *cfg.TP
+		ltp.NoDTLS, ltp.RawMode = false, false
+		rtt, lerr := RunPing(lctx, &ltp, legacyAddr, creds)
 		lcancel()
 		if lerr == nil {
 			rep.step("server", diagSkip, "на пробы не отвечает — старая версия сервера")
 			if len(others) > 0 {
 				rep.step("ports", diagSkip, "старый сервер — проверить нельзя")
 			}
-			rep.step("legacy", diagOK, fmt.Sprintf("подключение работает, %d мс", rtt))
-			return diagVerdict{Code: "server_old", Sev: "warn", Title: "Сервер работает, но устарел",
-				Text:  "Подключиться можно, пароль верный. На сервере старая версия wdtt-server: она не отвечает на диагностические пробы, поэтому подробная проверка недоступна. Обновите сервер, чтобы проверка могла называть причины сбоев.",
+			rep.step("legacy", diagOK, fmt.Sprintf("подключение по WG работает, %d мс", rtt))
+			text := fmt.Sprintf("Сервер работает: подключение по WG проходит за %d мс, пароль верный. "+
+				"Но на нём старая версия wdtt-server — она не отвечает на диагностические пробы, поэтому подробная проверка недоступна. "+
+				"Обновите сервер, чтобы проверка могла называть причины сбоев.", rtt)
+			if cfg.Listener != "dtls" {
+				text += fmt.Sprintf(" Если режим %s не подключается, переключитесь на WG.", diagListenerTitle(cfg.Listener))
+			}
+			return diagVerdict{Code: "server_old", Sev: "warn", Title: diagOldServerTitle,
+				Text:  text,
 				Facts: withFact(withFact(facts, "rtt_ms", strconv.FormatInt(rtt, 10)), "legacy", "true")}
 		}
 		if ctx.Err() != nil {
