@@ -277,6 +277,10 @@ fun DiagnosticsSheet(
     onAction: (String) -> Unit,
     onCopy: () -> Unit,
     onDismiss: () -> Unit,
+    /** Проверка отдельного профиля: свой заголовок, без кнопок-действий
+     *  (они меняют общие настройки), кнопка — просто «Проверить снова». */
+    title: String = "Проверка соединения",
+    standalone: Boolean = false,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val busy = state.running || state.requested
@@ -294,9 +298,11 @@ fun DiagnosticsSheet(
             // Заголовок
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    "Проверка соединения",
+                    title,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     subtitle(state),
@@ -306,14 +312,14 @@ fun DiagnosticsSheet(
             }
 
             if (state.isEmpty) {
-                EmptyState(tunnelActive)
+                EmptyState(tunnelActive || standalone)
             } else {
                 VerdictHero(state)
                 if (state.steps.isNotEmpty()) {
                     StepsTimeline(state.steps)
                 }
                 FactsBlock(state)
-                val actions = state.verdict?.actions.orEmpty()
+                val actions = if (standalone) emptyList() else state.verdict?.actions.orEmpty()
                 if (!busy && actions.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         actions.forEachIndexed { index, action ->
@@ -351,6 +357,7 @@ fun DiagnosticsSheet(
                 }
                 val runLabel = when {
                     busy -> "Проверяем…"
+                    standalone -> if (state.isEmpty) "Проверить" else "Проверить снова"
                     !tunnelActive -> "Подключить и проверить"
                     state.isEmpty -> "Проверить"
                     else -> "Проверить снова"
