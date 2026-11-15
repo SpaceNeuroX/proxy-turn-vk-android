@@ -112,7 +112,11 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 		hctx, hcancel := context.WithTimeout(ctx, 60*time.Second)
 		if err := dtlsConn.HandshakeContext(hctx); err != nil {
 			hcancel()
-			log.Printf("[DTLS] [ERR] Handshake failed from %s: %v", clientConn.RemoteAddr().String(), err)
+			// Диагностическая проба (netdiag.go) — не DTLS-клиент, ответ
+			// уже отправлен; это не ошибка рукопожатия.
+			if !strings.Contains(err.Error(), errDiagnosticProbe.Error()) {
+				log.Printf("[DTLS] [ERR] Handshake failed from %s: %v", clientConn.RemoteAddr().String(), err)
+			}
 			return
 		}
 		hcancel()
@@ -357,6 +361,7 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 			// handleConnRaw. WireGuard-пакеты всегда начинаются с байта
 			// типа сообщения 1-4, никогда не 0xFF.
 			if nn > 0 && (*b)[0] == 0xFF {
+				answerKeepalive(clientConn, nn)
 				continue
 			}
 			atomic.AddInt64(&totalBytesFromClient, int64(nn))
@@ -404,3 +409,18 @@ func handleConn(ctx context.Context, clientConn net.Conn, wgEndpoint string, wgD
 }
 
 const wrapKeyLen = 32
+
+// keepalivePong — ответ на keepalive клиента: один байт 0xFF. По нему
+// клиент понимает, что поток жив (go_client/session.go, проверка живости),
+// и снимает поток, на котором ответы перестали приходить. Ровно один байт:
+// все версии клиента такой пакет молча пропускают (n == 1 && b[0] == 0xFF),
+// старые тоже. На однобайтовые keepalive самых старых клиентов не отвечаем —
+// им ответ не нужен, и так исключён любой пинг-понг.
+var keepalivePong = []byte{0xFF}
+
+func answerKeepalive(conn net.Conn, n int) {
+	if n < 2 {
+		return
+	}
+	_, _ = conn.Write(keepalivePong)
+}

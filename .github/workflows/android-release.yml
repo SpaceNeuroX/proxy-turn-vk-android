@@ -16,16 +16,21 @@ permissions:
 jobs:
   build-release:
     name: Build signed release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
+      # Ручной запуск (Actions → Android release → Run workflow) — тестовая
+      # сборка для себя: подписана тем же ключом, ставится поверх релиза,
+      # но без тега и без GitHub Release. Проверка обновлений в приложении
+      # смотрит релизы и теги, поэтому тестовую сборку никто не увидит.
       - name: Validate release tag
+        if: github.event_name == 'push'
         shell: bash
         run: |
           git fetch origin master
@@ -36,7 +41,7 @@ jobs:
           test "$version" = "$gradle_version"
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -50,11 +55,17 @@ jobs:
             go.sum
             go_client/go.sum
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+        shell: bash
+        # SDK уже стоит на раннере ubuntu-24.04 ($ANDROID_HOME); сторонний
+        # android-actions/setup-android@v3 падал после перевода actions на
+        # Node 24 — ставим нужные пакеты штатным sdkmanager.
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+          (yes || true) | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Prepare signing key
         shell: bash
@@ -83,11 +94,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            gradle_version="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+            version="${gradle_version}-test-${GITHUB_SHA::7}"
+          fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
           found=0
           for apk in app/build/outputs/apk/release/*.apk; do
             test -f "$apk" || continue
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$apk"
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk"
             base="$(basename "$apk")"
             arch="${base#app-}"
             arch="${arch%-release.apk}"
@@ -98,7 +115,17 @@ jobs:
           cd dist
           sha256sum ./*.apk > SHA256SUMS.txt
 
+      - name: Upload test APKs
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwdtt-${{ env.APP_VERSION }}-test-signed
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish GitHub Release
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

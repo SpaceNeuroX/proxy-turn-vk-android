@@ -87,6 +87,21 @@ func main() {
 
 	initDB(*configDir, mainPasswordValue, *adminID, botTokenValue)
 
+	// Ключ диагностики (netdiag.go): без него сервер отвечает только на
+	// пробы ключом пароля. Не фатально — туннель работает и так.
+	if secret, err := loadOrCreateDiagSecret(*configDir); err != nil {
+		log.Printf("[DIAG] Ключ диагностики недоступен: %v", err)
+	} else if err := serverDiag.configure(secret); err != nil {
+		log.Printf("[DIAG] Ключ диагностики: %v", err)
+	}
+	serverDiag.setPort("dtls", *listen)
+	if *listenDirect != "" {
+		serverDiag.setPort("direct", *listenDirect)
+	}
+	if *listenRaw != "" {
+		serverDiag.setPort("raw", *listenRaw)
+	}
+
 	keys, err := loadOrGenerateKeys(*configDir)
 	if err != nil {
 		log.Fatalf("[WG] Ключи: %v", err)
@@ -173,7 +188,7 @@ func main() {
 		log.Fatalf("[WRAP] нет активных паролей для WRAP")
 	}
 
-	wrapListener, err := listenWrapped(addr, serverWrapKeys)
+	wrapListener, err := listenWrapped("dtls", addr, serverWrapKeys)
 	if err != nil {
 		log.Fatalf("[WRAP] %v", err)
 	}
@@ -200,7 +215,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[DIRECT] адрес: %v", err)
 		}
-		directWrapListener, err := listenWrapped(directAddr, serverWrapKeys)
+		directWrapListener, err := listenWrapped("direct", directAddr, serverWrapKeys)
 		if err != nil {
 			log.Fatalf("[DIRECT] %v", err)
 		}
@@ -242,7 +257,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[RAW] адрес: %v", err)
 		}
-		rawWrapListener, err := listenWrapped(rawAddr, serverWrapKeys)
+		rawWrapListener, err := listenWrapped("raw", rawAddr, serverWrapKeys)
 		if err != nil {
 			log.Fatalf("[RAW] %v", err)
 		}

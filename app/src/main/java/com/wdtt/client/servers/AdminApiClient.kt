@@ -30,6 +30,10 @@ object AdminApiClient {
         val downBytes: Long,
         val upBytes: Long,
         val activeDevices: Int,
+        /** Ключ диагностики сервера (dk=) — есть только у новых серверов. */
+        val diagKey: String = "",
+        val rawPort: Int = 0,
+        val directPort: Int = 0,
     )
 
     sealed class Result<out T> {
@@ -109,6 +113,9 @@ object AdminApiClient {
             downBytes = o.optLong("down_bytes", 0L),
             upBytes = o.optLong("up_bytes", 0L),
             activeDevices = o.optInt("active_devices", 0),
+            diagKey = o.optString("diag_key", ""),
+            rawPort = o.optInt("raw_port", 0),
+            directPort = o.optInt("direct_port", 0),
         )
     }
 

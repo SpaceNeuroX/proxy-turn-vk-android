@@ -146,6 +146,11 @@ func main() {
 				atomic.StoreInt32(&pauseFlag, 1)
 			case line == "RESUME":
 				atomic.StoreInt32(&pauseFlag, 0)
+			case line == "SCREEN_OFF":
+				// Экран выключен: реже keepalive, чтобы радио спало (liveness.go).
+				lowPowerMode.Store(true)
+			case line == "SCREEN_ON":
+				lowPowerMode.Store(false)
 			case line == "STOP":
 				cancel()
 				return
@@ -160,7 +165,7 @@ func main() {
 		}
 	}()
 
-	host := flag.String("turn", "", "переопределить IP TURN")
+	host := flag.String("turn", "", "свои TURN-адреса вместо адресов VK: IP или IP:порт через запятую")
 	port := flag.String("port", "", "переопределить порт TURN")
 	listen := flag.String("listen", "127.0.0.1:9000", "локальный адрес")
 	vkHash := flag.String("vk", "", "хеши VK-звонков (через запятую)")
@@ -175,6 +180,7 @@ func main() {
 	vkAnonPath := flag.String("vk-anon-path", "vkcalls", "анонимный путь VK TURN (vkcalls/legacy)")
 	vkCredsFile := flag.String("vk-creds-file", "", "файл с TURN кредами от аккаунта VK")
 	goDNS := flag.String("go-dns", "yandex", "DNS для VK (yandex/cloudflare/google, doh-yandex/doh-cloudflare/doh-google, custom:IP или doh:URL)")
+	dnsFallback := flag.String("dns-fallback", "", "DNS текущей сети (оператора/роутера) через запятую — запасной для -go-dns, основной для -go-dns operator")
 	obfsMode := flag.String("obfs", "audio", "режим обфускации (audio/video)")
 	checkHashes := flag.Bool("check-hashes", false, "проверить VK-хеши и выйти")
 	connMode := flag.String("mode", "vpn", "режим клиента (vpn|socks|rawtun)")
@@ -183,8 +189,14 @@ func main() {
 	socksUser := flag.String("socks-user", "", "логин SOCKS5")
 	socksPass := flag.String("socks-pass", "", "пароль SOCKS5")
 	noDTLS := flag.Bool("notls", false, "прямой режим: RTP-obfs AEAD без DTLS поверх TURN (нужен сервер с -listen-direct)")
-	turnTCP := flag.Bool("turn-tcp", false, "соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях, напр. Ростелеком)")
+	turnTCP := flag.Bool("turn-tcp", false, "то же, что -turn-transport tcp (оставлено для совместимости)")
+	turnTransport := flag.String("turn-transport", "", "транспорт до TURN-relay VK: udp или tcp (по умолчанию udp, или tcp при -turn-tcp)")
 	tunFdSock := flag.String("tun-fd-sock", "", "unix-сокет для получения TUN fd от Android (только -mode rawtun)")
+	diagOnly := flag.Bool("diag", false, "проверить соединение через VK (TURN, сервер, пароль, порты, MTU) и выйти")
+	diagKeyToken := flag.String("diag-key", "", "ключ диагностики сервера из ссылки (dk=)")
+	diagPortsFlag := flag.String("diag-ports", "", "порты сервера для проверки: dtls=56000,direct=56002,raw=56003")
+	diagAuto := flag.Bool("diag-auto", true, "проверять соединение автоматически, если туннель не поднимается")
+	diagTrigger := flag.String("diag-trigger", "", "файл-триггер: появился — запустить проверку (для приложения)")
 
 	flag.Parse()
 	activeConnMode := strings.ToLower(strings.TrimSpace(*connMode))
@@ -199,7 +211,7 @@ func main() {
 			log.Fatal("[SOCKS] Логин и пароль должны быть не длиннее 255 байт")
 		}
 	}
-	setupGlobalResolver(*goDNS)
+	setupGlobalResolver(*goDNS, parseDNSFallback(*dnsFallback))
 	activeCaptchaMode := setCaptchaMode(*captchaMode)
 	activeVkAuthMode := setVkAuthMode(*vkAuthMode)
 	activeVkAnonPath := setVkAnonPath(*vkAnonPath)
@@ -250,8 +262,8 @@ func main() {
 		log.Fatalf("[КЛИЕНТ] WRAP key derive: %v", err)
 	}
 
-	// Лимит воркеров
-	maxWorkers := 108
+	// Лимит воркеров: 27 на хеш × 6 хешей (SettingsStore.MAX_TOTAL_WORKERS).
+	maxWorkers := 162
 	if *numW > maxWorkers {
 		*numW = maxWorkers
 	}
@@ -271,15 +283,59 @@ func main() {
 		*numW = (*numW / workersPerGroup) * workersPerGroup
 	}
 
+	activeTurnTransport := normalizeTurnTransport(*turnTransport)
+	if strings.TrimSpace(*turnTransport) == "" && *turnTCP {
+		activeTurnTransport = turnTransportTCP
+	}
+
 	tp := &TurnParams{
-		Host:         *host,
-		Port:         *port,
-		Hashes:       hashes,
-		WrapKey:      wrapKey,
-		ObfsMode:     normalizeObfsMode(*obfsMode),
-		NoDTLS:       *noDTLS,
-		RawMode:      activeConnMode == "rawtun",
-		TCPTransport: *turnTCP,
+		Hosts:     parseTurnHosts(*host),
+		Port:      *port,
+		Hashes:    hashes,
+		WrapKey:   wrapKey,
+		ObfsMode:  normalizeObfsMode(*obfsMode),
+		NoDTLS:    *noDTLS,
+		RawMode:   activeConnMode == "rawtun",
+		Transport: activeTurnTransport,
+	}
+
+	diagCfg := &diagConfig{
+		TP:       tp,
+		Peer:     peer,
+		Listener: diagTargetListener(tp),
+		Ports:    parseDiagPorts(*diagPortsFlag),
+		Password: *connPassword,
+		DeviceID: *deviceID,
+	}
+	if secret, err := parseDiagToken(*diagKeyToken); err != nil {
+		log.Printf("[ДИАГ] %v — проверка будет без ключа сервера", err)
+	} else if secret != nil {
+		if key, err := deriveDiagKey(secret); err == nil {
+			diagCfg.DiagKey = key
+		}
+	}
+	diagHash := hashes[0]
+	diagCfg.Creds = func(ctx context.Context, fresh bool) (*Credentials, error) {
+		// Обычно — креды первой группы из кэша (без лишнего запроса к VK);
+		// fresh — отдельный поток, если квоту на них уже выбрали воркеры.
+		stream := 100
+		if fresh {
+			stream = 990
+			getStreamCache(stream).invalidate(stream)
+		}
+		u, p, urls, err := GetCreds(ctx, diagHash, stream)
+		if err != nil {
+			return nil, err
+		}
+		return &Credentials{User: u, Pass: p, TurnURLs: urls, CacheStreamID: stream}, nil
+	}
+
+	if *diagOnly {
+		v := runDiagnostics(ctx, diagCfg, "manual")
+		if v.Sev == "error" {
+			os.Exit(2)
+		}
+		return
 	}
 
 	if *pingOnly {
@@ -342,10 +398,9 @@ func main() {
 	log.Printf("[КЛИЕНТ] Воркеров: %d (групп: %d, по %d)", *numW, numGroups, workersPerGroup)
 	log.Printf("[КЛИЕНТ] Хешей: %d", len(hashes))
 	log.Printf("[КЛИЕНТ] Слушаю: %s | Пир: %s", *listen, *peerAddr)
-	if *turnTCP {
-		log.Printf("[КЛИЕНТ] TURN-транспорт: TCP")
-	} else {
-		log.Printf("[КЛИЕНТ] TURN-транспорт: UDP")
+	log.Printf("[КЛИЕНТ] TURN-транспорт: %s", strings.ToUpper(tp.Transport))
+	if len(tp.Hosts) > 0 {
+		log.Printf("[КЛИЕНТ] Свои TURN-адреса: %s", strings.Join(tp.Hosts, ", "))
 	}
 	log.Printf("[КЛИЕНТ] Режим: %s", activeConnMode)
 	if activeConnMode == "socks" {
@@ -367,6 +422,8 @@ func main() {
 		close(shutdownCh)
 	}()
 	go stats.RunLoop(shutdownCh)
+	diagCfg.TunnelReceiving = tunnelReceivingRecently
+	go diagWatchdog(ctx, diagCfg, stats, &pauseFlag, *diagAuto, *diagTrigger)
 
 	var disp *Dispatcher
 	if activeConnMode == "rawtun" {

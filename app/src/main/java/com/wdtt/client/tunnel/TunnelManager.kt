@@ -109,6 +109,15 @@ object TunnelManager {
     val activeWorkers = MutableStateFlow(0)
     val isReconnecting = MutableStateFlow(false)
     val connectionPipeline = MutableStateFlow(ConnectionPipelineState())
+    /** Проверка соединения через VK (см. ConnectionDiagnostics, go_client/netdiag.go). */
+    val diagnostics = MutableStateFlow(DiagnosticsState())
+    @Volatile private var diagTriggerFile: java.io.File? = null
+    /** Проверку попросили до запуска процесса — триггер создаётся вместе с ним. */
+    @Volatile private var pendingManualDiag = false
+    /** Экран включён — Go реже шлёт keepalive, пока он выключен (go_client/liveness.go). */
+    @Volatile private var screenOn = true
+    /** Строки в stdin Go-процесса пишутся из разных потоков — не даём им перемешаться. */
+    private val goStdinLock = Any()
     /** Плановый рестарт транспорта (смена сети): log reader не должен сбрасывать running. */
     @Volatile
     var transportRestartInProgress: Boolean = false
@@ -296,6 +305,7 @@ object TunnelManager {
         if (!isSwitching) {
             clearLogs()
             lastFatalError.value = null
+            diagnostics.value = DiagnosticsState(requested = pendingManualDiag)
             // Флаг обновится в startJob через first()/collect; пока — кэш.
             currentParams = params
             resetConnectionPipeline()
@@ -463,6 +473,13 @@ object TunnelManager {
 
                 cmd.add("-go-dns")
                 cmd.add(params.goDnsArg)
+                // DNS текущей сети (оператор или роутер Wi-Fi): запасной, если
+                // выбранный DNS не отвечает, и основной для «Операторского».
+                val networkDns = NetworkDns.current(appContext)
+                if (networkDns.isNotEmpty()) {
+                    cmd.add("-dns-fallback")
+                    cmd.add(networkDns.joinToString(","))
+                }
 
                 cmd.add("-obfs")
                 cmd.add(SettingsStore.normalizeObfsMode(params.obfsMode))
@@ -483,8 +500,41 @@ object TunnelManager {
                     )
                 }
 
-                if (params.turnTcp) {
-                    cmd.add("-turn-tcp")
+                val turnTransport = SettingsStore.normalizeTurnTransport(params.turnTransport)
+                cmd.add("-turn-transport")
+                cmd.add(turnTransport)
+                val turnHosts = params.turnHosts.trim()
+                if (turnHosts.isNotEmpty()) {
+                    cmd.add("-turn")
+                    cmd.add(turnHosts)
+                }
+                updateLog(
+                    "turn_transport",
+                    "[СЕТЬ] TURN: ${turnTransport.uppercase()}" +
+                        if (turnHosts.isNotEmpty()) ", свои адреса: $turnHosts" else "",
+                    1,
+                    false
+                )
+
+                // Проверка соединения через VK: сама, если туннель не
+                // поднимается, и по кнопке (файл-триггер, Go опрашивает его раз в секунду).
+                val triggerFile = java.io.File(appContext.cacheDir, "diag.trigger")
+                diagTriggerFile = triggerFile
+                if (pendingManualDiag) {
+                    pendingManualDiag = false
+                    runCatching { triggerFile.writeText("1") }
+                } else {
+                    runCatching { triggerFile.delete() }
+                }
+                cmd.add("-diag-trigger")
+                cmd.add(triggerFile.absolutePath)
+                if (params.diagPorts.isNotBlank()) {
+                    cmd.add("-diag-ports")
+                    cmd.add(params.diagPorts)
+                }
+                if (params.diagKey.isNotBlank()) {
+                    cmd.add("-diag-key")
+                    cmd.add(params.diagKey)
                 }
 
                 val mode = SettingsStore.normalizeConnectionMode(params.connectionMode)
@@ -520,7 +570,7 @@ object TunnelManager {
                 }
 
                 setConnectionPipelineCurrent(ConnectionStep.DNS)
-                var dnsProbe = GoDnsProbe.check(params.goDnsArg)
+                var dnsProbe = GoDnsProbe.check(params.goDnsArg, networkDns = networkDns)
                 if (isSwitching && !dnsProbe.reachable) {
                     for (attempt in 2..4) {
                         updateLog(
@@ -530,8 +580,34 @@ object TunnelManager {
                             false,
                         )
                         delay(2_000)
-                        dnsProbe = GoDnsProbe.check(params.goDnsArg)
+                        dnsProbe = GoDnsProbe.check(params.goDnsArg, networkDns = networkDns)
                         if (dnsProbe.reachable) break
+                    }
+                }
+                if (!dnsProbe.reachable) {
+                    // Запасной вариант: для обычного выбора — DNS сети, для
+                    // «Операторского» — Яндекс. Go-клиент переключается так же.
+                    val isOperator = params.goDnsArg.trim().equals("operator", ignoreCase = true)
+                    val fallback = when {
+                        isOperator -> GoDnsProbe.check("yandex")
+                        networkDns.isNotEmpty() -> GoDnsProbe.checkServers("DNS сети", networkDns)
+                        else -> null
+                    }
+                    if (fallback?.reachable == true) {
+                        updateLog(
+                            "go_dns_fallback",
+                            "[СЕТЬ] ${dnsProbe.title} не отвечает — используем ${fallback.title} (${fallback.okHosts.joinToString(", ")})",
+                            50,
+                            false
+                        )
+                        dnsProbe = fallback
+                    } else if (fallback != null) {
+                        updateLog(
+                            "go_dns_fallback_fail",
+                            "[СЕТЬ] Запасной ${fallback.title} тоже недоступен: ${fallback.statusText}",
+                            50,
+                            true
+                        )
                     }
                 }
                 if (!dnsProbe.reachable) {
@@ -544,7 +620,7 @@ object TunnelManager {
                     failConnectionPipeline(ConnectionStep.DNS)
                     updateLog(
                         "go_dns_tip",
-                        "[СЕТЬ] Смените DNS в ⚙️ → Сеть (Яндекс / Cloudflare / Google / DoH / Свой)",
+                        "[СЕТЬ] Смените DNS в ⚙️ → Сеть (Операторский / Яндекс / Cloudflare / Google / DoH / Свой)",
                         50,
                         true
                     )
@@ -593,6 +669,7 @@ object TunnelManager {
 
                 process = pb.start()
                 processStartedAtMs = System.currentTimeMillis()
+                if (!screenOn) writeGoCommand("SCREEN_OFF")
                 wrapAuthTimeoutCount = 0
                 lastActiveAtMs = 0L
                 lastStatsReceivedAtMs = System.currentTimeMillis()
@@ -636,6 +713,7 @@ object TunnelManager {
         transportRestartInProgress = false
         isConnecting.value = false
         markRunning(false)
+        interruptDiagnostics()
         if (stats.value == "Подключение…" ||
             stats.value.startsWith("VK:") ||
             stats.value == "Запуск туннеля…"
@@ -718,6 +796,18 @@ object TunnelManager {
 
                     // SOCKS IPv6: туннель только IPv4 — клиент сам уйдёт на A-запись.
                     if (isBenignSocksIpv6Noise(lineTrim)) {
+                        return@forEachLine
+                    }
+
+                    // Проверка соединения: машинные события и её же строки лога
+                    // разбираем здесь, до эвристик ниже (в тексте шагов бывают
+                    // «timeout», «refused» и т.п., которые не должны их запускать).
+                    if (lineTrim.startsWith(ConnectionDiagnostics.LINE_PREFIX)) {
+                        onDiagnosticsEvent(lineTrim)
+                        return@forEachLine
+                    }
+                    if (lineTrim.startsWith("[ДИАГ]")) {
+                        logDiagnosticsLine(lineTrim)
                         return@forEachLine
                     }
 
@@ -1222,12 +1312,79 @@ object TunnelManager {
                 }
                 if (process === observedProcess) {
                     process = null
+                    interruptDiagnostics()
                     if (!transportRestartInProgress) {
                         markRunning(false)
                     }
                 }
             }
         }
+    }
+
+    private fun onDiagnosticsEvent(line: String) {
+        val next = ConnectionDiagnostics.apply(diagnostics.value, line) ?: return
+        diagnostics.value = next
+        if (next.running || next.verdict == null) return
+        // Сервер прямо ответил, что пароль не подходит, — воркеры будут
+        // биться впустую. Останавливаемся с понятной причиной.
+        if (next.isFatalPasswordVerdict && activeWorkers.value <= 0) {
+            handleCriticalError("\uD83D\uDD12 ${next.verdict.title}. Воркеры остановлены.")
+        }
+    }
+
+    private fun logDiagnosticsLine(line: String) {
+        val text = line.removePrefix("[ДИАГ]").trim()
+        val key = when {
+            text.startsWith("═") -> "diag_head"
+            text.startsWith("Итог:") -> "diag_result"
+            else -> "diag_" + text.drop(2).substringBefore(':').trim().hashCode()
+        }
+        val isError = text.startsWith("✗") ||
+            (key == "diag_result" && diagnostics.value.verdict?.severity == DiagSeverity.ERROR)
+        updateLog(key, "[ДИАГ] $text", 3, isError)
+    }
+
+    /**
+     * Запустить проверку соединения. Если Go-процесс работает — сразу (через
+     * файл-триггер); если нет — вернёт false, и проверка стартует вместе со
+     * следующим подключением.
+     */
+    fun requestDiagnostics(): Boolean {
+        val proc = process
+        val trigger = diagTriggerFile
+        if (proc != null && proc.isAlive && trigger != null) {
+            val ok = runCatching { trigger.writeText("1") }.isSuccess
+            if (ok) diagnostics.value = diagnostics.value.copy(requested = true)
+            return ok
+        }
+        pendingManualDiag = true
+        diagnostics.value = DiagnosticsState(requested = true)
+        return false
+    }
+
+    /** Go-процесс ушёл посреди проверки — события `end` уже не будет. */
+    private fun interruptDiagnostics() {
+        pendingManualDiag = false
+        val d = diagnostics.value
+        if (!d.running && !d.requested) return
+        diagnostics.value = if (d.steps.isEmpty() && d.verdict == null) {
+            DiagnosticsState()
+        } else {
+            d.copy(
+                running = false,
+                requested = false,
+                finishedAtMs = System.currentTimeMillis(),
+                steps = d.steps.map {
+                    if (it.state == DiagStepState.RUNNING) it.copy(state = DiagStepState.SKIP, text = "прервано") else it
+                },
+            )
+        }
+    }
+
+    fun dismissDiagnostics() {
+        if (diagnostics.value.running) return
+        pendingManualDiag = false
+        diagnostics.value = DiagnosticsState()
     }
 
     private fun handleCriticalError(message: String) {
@@ -1289,7 +1446,15 @@ object TunnelManager {
                         lastActiveAtMs == 0L &&
                         !ManlCaptchaWebViewManager.isCaptchaPending
                     ) {
-                        handleCriticalError("\uD83D\uDD12 Неверный пароль подключения или несовместимый WRAP. Воркеры остановлены.")
+                        // Если проверка соединения уже назвала причину — говорим её,
+                        // а не гадаем про пароль.
+                        val diagVerdict = diagnostics.value.verdict
+                        val reason = if (diagVerdict != null && diagVerdict.severity != DiagSeverity.OK) {
+                            "${diagVerdict.title}. Воркеры остановлены."
+                        } else {
+                            "\uD83D\uDD12 Неверный пароль подключения или несовместимый WRAP. Воркеры остановлены."
+                        }
+                        handleCriticalError(reason)
                         return@launch
                     } else if (System.currentTimeMillis() - zeroWorkersSince > 90_000 && !ManlCaptchaWebViewManager.isCaptchaPending) {
                         updateLog("watchdog", "⚠ Зомби-процесс (0 воркеров 90с). Перезапуск...", 50, true)
@@ -1601,6 +1766,7 @@ object TunnelManager {
         markRunning(false)
         isConnecting.value = false
         activeWorkers.value = 0
+        interruptDiagnostics()
         // При ошибке шага оставляем схему с крестиком; иначе прячем.
         if (connectionPipeline.value.failed == null) {
             hideConnectionPipeline()
@@ -1623,6 +1789,10 @@ object TunnelManager {
             runCatching { wgHelperSnapshot?.stopTunnel() }
         }
     }
+
+    /** Режим работающего туннеля (vpn / rawtun / socks) или null, если туннеля нет. */
+    fun currentConnectionMode(): String? =
+        currentParams?.connectionMode?.let { SettingsStore.normalizeConnectionMode(it) }
 
     fun reloadWireGuard() {
         if (running.value && currentParams?.isSocksMode != true) {
@@ -1733,15 +1903,31 @@ object TunnelManager {
      * Записывает результат решения капчи в stdin Go-процесса.
      */
     private fun writeCaptchaResult(result: String) {
-        val proc = process
-        if (proc == null || !proc.isAlive) return
-        try {
-            val line = "CAPTCHA_RESULT|$result\n"
-            proc.outputStream.write(line.toByteArray(Charsets.UTF_8))
-            proc.outputStream.flush()
-        } catch (e: Exception) {
-            updateLog("captcha_write_err", "[КАПЧА] Ошибка записи: ${e.message}", 200, true)
+        if (!writeGoCommand("CAPTCHA_RESULT|$result")) {
+            updateLog("captcha_write_err", "[КАПЧА] Ошибка записи в процесс", 200, true)
         }
+    }
+
+    /** Одна строка-команда в stdin Go-процесса. false — процесса нет или запись не удалась. */
+    private fun writeGoCommand(command: String): Boolean {
+        val proc = process
+        if (proc == null || !proc.isAlive) return false
+        return synchronized(goStdinLock) {
+            runCatching {
+                proc.outputStream.write("$command\n".toByteArray(Charsets.UTF_8))
+                proc.outputStream.flush()
+            }.isSuccess
+        }
+    }
+
+    /**
+     * Экран выключился/включился. При выключенном экране Go шлёт keepalive
+     * реже, чтобы радио спало; при включении сразу проверяет все потоки.
+     */
+    fun setScreenOn(on: Boolean) {
+        if (screenOn == on) return
+        screenOn = on
+        writeGoCommand(if (on) "SCREEN_ON" else "SCREEN_OFF")
     }
 
     private suspend fun handleVkAuthRequired(hash: String) {
@@ -1867,7 +2053,8 @@ object TunnelManager {
             appendLine("Captcha: ${p.captchaMode}/${p.captchaSolveMethod}")
             appendLine("DNS: ${p.goDnsArg}")
             appendLine("Без DTLS: ${p.noDtls}")
-            appendLine("TURN по TCP: ${p.turnTcp}")
+            appendLine("TURN-транспорт: ${p.turnTransport}")
+            appendLine("Свои TURN-адреса: ${p.turnHosts.ifBlank { "нет" }}")
             append("Подробные логи: ${p.detailedLogs}")
         }
     }
@@ -2145,9 +2332,15 @@ data class TunnelParams(
     val socksPassword: String = "",
     /** Экспериментально: RTP-obfs AEAD без DTLS. Нужен сервер с -listen-direct, peer уже должен указывать на direct-порт. */
     val noDtls: Boolean = false,
-    /** TURN-relay по TCP вместо UDP — обход UDP-душения на некоторых сетях (напр. Ростелеком). */
-    val turnTcp: Boolean = false,
-    val detailedLogs: Boolean = false
+    /** Транспорт до TURN-relay VK: udp / tcp (TCP — обход UDP-душения, напр. Ростелеком). */
+    val turnTransport: String = SettingsStore.TURN_TRANSPORT_UDP,
+    /** Свои TURN-адреса вместо адресов VK (IP или IP:порт через запятую), пусто — адреса VK. */
+    val turnHosts: String = "",
+    val detailedLogs: Boolean = false,
+    /** Ключ диагностики сервера (dk= из ссылки), пусто — нет. */
+    val diagKey: String = "",
+    /** Порты сервера для проверки: "dtls=56000,direct=56002,raw=56003". */
+    val diagPorts: String = ""
 ) {
     /** Go поднимает локальный SOCKS5 (userspace WG) вместо Android GoBackend — верно и для socks, и для rawtun. */
     val isSocksMode: Boolean

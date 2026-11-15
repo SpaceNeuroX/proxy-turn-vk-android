@@ -278,8 +278,11 @@ func fetchVkCredsSerialized(ctx context.Context, link string, streamID int) (str
 	vkRequestMu.Lock()
 	defer vkRequestMu.Unlock()
 
-	// Throttle: 3-6 seconds between requests
-	minInterval := 3*time.Second + time.Duration(rand.Intn(3000))*time.Millisecond
+	// Запросы кредов к VK идут строго по одному (мьютекс выше) с короткой
+	// паузой между ними. Раньше пауза была 3-6 с, и каждая следующая группа
+	// из 9 потоков ждала её целиком — на 18-36 потоках это главная задержка
+	// набора. csqtt держит 0,1 с при тех же VK-лимитах; берём с запасом.
+	minInterval := 600*time.Millisecond + time.Duration(rand.Intn(400))*time.Millisecond
 	elapsed := time.Since(globalLastVkFetchTime)
 
 	if !globalLastVkFetchTime.IsZero() && elapsed < minInterval {
@@ -753,22 +756,6 @@ func isWebViewCaptchaTimeout(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "timed out")
 }
 
-func turnURLsToAddresses(urls []string) []string {
-	var addresses []string
-	for _, urlStr := range urls {
-		urlStr = strings.TrimSpace(urlStr)
-		if urlStr == "" {
-			continue
-		}
-		clean := strings.Split(urlStr, "?")[0]
-		address := strings.TrimPrefix(strings.TrimPrefix(clean, "turn:"), "turns:")
-		if address != "" {
-			addresses = append(addresses, address)
-		}
-	}
-	return addresses
-}
-
 // ─── GetCreds returns TURN credentials for a given stream ───
 
 func GetCreds(ctx context.Context, link string, streamID int) (string, string, []string, error) {
@@ -859,55 +846,4 @@ func formatGoDNSServers(servers []string) string {
 		}
 	}
 	return strings.Join(parts, ", ")
-}
-
-func setupGlobalResolver(arg string) {
-	arg = strings.TrimSpace(arg)
-	if goDNSIsDoH(arg) {
-		setupDoHResolver(arg, goDoHEndpointsForArg(arg))
-		return
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   3 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-	servers := goDNSServersForArg(arg)
-	log.Printf(
-		"[КЛИЕНТ] DNS для VK: %s (%s) — UDP/TCP :53",
-		goDNSLabel(arg),
-		formatGoDNSServers(servers),
-	)
-
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			var lastErr error
-			for _, dns := range servers {
-				conn, err := dialer.DialContext(ctx, "udp", dns)
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-				conn, err = dialer.DialContext(ctx, "tcp", dns)
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-
-			address = strings.TrimSpace(address)
-			if address != "" && !isLoopbackDNSAddress(address) {
-				conn, err := dialer.DialContext(ctx, network, address)
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			if lastErr == nil {
-				lastErr = fmt.Errorf("no DNS servers available for %q", arg)
-			}
-			return nil, lastErr
-		},
-	}
 }

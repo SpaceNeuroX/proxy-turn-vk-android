@@ -15,6 +15,43 @@ const workersPerGroup = 9
 
 const allocateGateInterval = 100 * time.Millisecond
 
+// quotaRetryDelay — пауза после «Allocation Quota Reached» (486). Раньше
+// было 30-60 с с первого же раза: при массовом переподключении (сервер
+// вернулся, сменилась сеть) один поток, наткнувшийся на квоту, выпадал на
+// полминуты, хотя слоты освобождаются за секунды. Теперь 2 → 4 → 8 → 16 →
+// 30 с плюс разброс; со второго раза берутся свежие креды.
+func quotaRetryDelay(streak int) time.Duration {
+	if streak < 1 {
+		streak = 1
+	}
+	d := 2 * time.Second
+	for i := 1; i < streak && d < 30*time.Second; i++ {
+		d *= 2
+	}
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d + time.Duration(rand.Intn(1000))*time.Millisecond
+}
+
+// workerRetryDelay — пауза перед повтором упавшего потока: 0,5 с с
+// удвоением до 8 с плюс разброс, чтобы потоки не ломились разом. Раньше
+// было 5-15 с на любую ошибку, и поток, споткнувшийся на старте, выпадал
+// из набора на десяток секунд.
+func workerRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := 500 * time.Millisecond
+	for i := 1; i < attempt && d < 8*time.Second; i++ {
+		d *= 2
+	}
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d + time.Duration(rand.Intn(500))*time.Millisecond
+}
+
 // WorkerGroup:
 // Запускает 9 потоков с одними кредами. Ротации нет — работает до смерти воркеров.
 func WorkerGroup(
@@ -71,10 +108,12 @@ func WorkerGroup(
 		creds = &Credentials{User: user, Pass: pass, TurnURLs: turnURLs, CacheStreamID: credStreamID}
 	} else {
 		log.Printf("[ГРУППА #%d] Ошибка кредов: %v", groupID, err)
+		markDiagCredsFailed()
 		return
 	}
 
 	log.Printf("[ГРУППА #%d] Креды OK, TURN: %v, %d воркеров", groupID, creds.TurnURLs, len(workerIDs))
+	markDiagCredsReady()
 
 	var configRequestInFlight int32
 	var wg sync.WaitGroup
@@ -150,6 +189,7 @@ func WorkerGroup(
 
 			shouldGetConfig := getConfig
 			attempt := 0
+			quotaStreak := 0 // сколько раз подряд VK ответил «квота исчерпана»
 
 			for {
 				if ctx.Err() != nil {
@@ -170,6 +210,7 @@ func WorkerGroup(
 				credsSnapshot.TurnURLs = cloneStringSlice(creds.TurnURLs)
 				credsMu.RUnlock()
 
+				sessStarted := time.Now()
 				configDelivered, sessErr := RunSession(ctx, tp, peer, d, localPort,
 					getConf, cc, wid, &credsSnapshot, deviceID, password, stats, allocateTicker.C)
 
@@ -221,7 +262,14 @@ func WorkerGroup(
 
 					attempt++
 					if isTurnQuota {
-						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
+						quotaStreak++
+						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (%d-й раз подряд), повтор через %v: %s", wid, quotaStreak, quotaRetryDelay(quotaStreak).Truncate(time.Second), errStr)
+						// Повторный отказ: на этих кредах слотов нет — берём
+						// свежие (у них своя квота). В режиме аккаунта VK креды
+						// выдаёт приложение через авторизацию — его не дёргаем.
+						if quotaStreak >= 2 && getVkAuthMode() != "account" {
+							refreshCreds("TURN quota")
+						}
 					} else if turnAllocAttrMissing {
 						log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
 						refreshCreds("TURN Allocate attribute-not-found")
@@ -246,9 +294,16 @@ func WorkerGroup(
 					return
 				}
 
-				retryDelay := time.Duration(5+rand.Intn(11)) * time.Second
+				// Поток поработал и упал — это новый сбой, а не серия неудач.
+				if time.Since(sessStarted) > 60*time.Second {
+					attempt = 1
+				}
+				if !quotaRetry {
+					quotaStreak = 0
+				}
+				retryDelay := workerRetryDelay(attempt)
 				if quotaRetry {
-					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+					retryDelay = quotaRetryDelay(quotaStreak)
 				} else if fastRetry {
 					retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
 				}
@@ -305,7 +360,9 @@ func normalizeVKJoinHash(input string) string {
 
 // TurnParams — конфигурация TURN
 type TurnParams struct {
-	Host     string
+	// Hosts: свои TURN-адреса (-turn), заменяют хост VK по кругу между
+	// сессиями — см. selectTurnTarget.
+	Hosts    []string
 	Port     string
 	Hashes   []string
 	WrapKey  []byte // Password-derived WRAP key (32 bytes), nil = disabled
@@ -317,11 +374,10 @@ type TurnParams struct {
 	// RawMode: raw-IP без WireGuard (см. server/main.go -listen-raw, handleConnRaw).
 	// Подразумевает NoDTLS — сервер на -listen-raw DTLS не понимает.
 	RawMode bool
-	// TCPTransport: соединяться с TURN-relay по TCP вместо UDP (см.
-	// dialTURNConn в session.go). На некоторых сетях (замечено на
-	// Ростелекоме) UDP до TURN душится/дропается провайдером агрессивнее,
-	// чем TCP на тот же relay — этот флаг обходит именно это.
-	TCPTransport bool
+	// Transport: как подключаться к TURN-relay VK — udp или tcp (см.
+	// turn_endpoint.go). На некоторых сетях (замечено на Ростелекоме) UDP до
+	// TURN душится провайдером агрессивнее, чем TCP на тот же relay.
+	Transport string
 }
 
 // Credentials — учетные данные TURN

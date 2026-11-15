@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -165,6 +166,21 @@ fun ProfilesTab(
                 pingingState[profile.id] = false
                 pingJobs.remove(profile.id)
             }
+        }
+    }
+
+    // Проверка соединения отдельного профиля (кнопка на карточке). Лист с
+    // подробностями открывается сразу и обновляется по ходу проверки.
+    var diagProfileId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    fun checkProfile(profile: ConnectionProfile) {
+        diagProfileId = profile.id
+        if (com.wdtt.client.ProfileDiagnostics.isRunning(profile.id)) return
+        val effectiveHashes = if (profile.useGlobalHashes) globalHashes.ifEmpty { profile.vkHashes } else profile.vkHashes
+        // Не rememberCoroutineScope: уход с вкладки не должен обрывать проверку.
+        com.wdtt.client.TunnelManager.scope.launch {
+            val rtt = com.wdtt.client.ProfileDiagnostics.run(context, profile, effectiveHashes)
+            withContext(Dispatchers.Main) { pingResults[profile.id] = rtt }
         }
     }
 
@@ -469,7 +485,7 @@ fun ProfilesTab(
         val name = nameInput.trim()
         val peer = peerInput.trim()
         val hashes = hashesInput.trim()
-        val workers = workersInput.toIntOrNull()?.coerceIn(1, 128) ?: 9
+        val workers = workersInput.toIntOrNull()?.coerceIn(1, SettingsStore.MAX_TOTAL_WORKERS) ?: 9
         val port = portInput.toIntOrNull()?.coerceIn(1, 65535) ?: 9000
         val password = passwordInput
         
@@ -499,7 +515,12 @@ fun ProfilesTab(
                         password = password,
                         trafficMb = existingTraffic,
                         groupId = existingGroupId,
-                        useGlobalHashes = useGlobal
+                        useGlobalHashes = useGlobal,
+                        // Ключ диагностики привязан к серверу: сменили сервер —
+                        // старый ключ больше не подходит.
+                        diagKey = existingProfile?.diagKey?.takeIf {
+                            PeerAddress.host(existingProfile.peer).equals(PeerAddress.host(peer), ignoreCase = true)
+                        } ?: ""
                     )
                 )
             }
@@ -1666,8 +1687,11 @@ fun ProfilesTab(
                             Spacer(Modifier.width(8.dp))
                             
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                // Полная проверка профиля (как на главной): TURN,
+                                // ответ сервера, пароль, порты, крупные пакеты.
+                                val checking = com.wdtt.client.ProfileDiagnostics.isRunning(profile.id)
                                 androidx.compose.material3.FilledIconButton(
-                                    onClick = { pingProfile(profile) },
+                                    onClick = { checkProfile(profile) },
                                     modifier = Modifier.size(28.dp),
                                     colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
                                         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -1675,7 +1699,7 @@ fun ProfilesTab(
                                     ),
                                     enabled = pingingState[profile.id] != true
                                 ) {
-                                    if (pingingState[profile.id] == true) {
+                                    if (checking || pingingState[profile.id] == true) {
                                         CircularProgressIndicator(
                                             modifier = Modifier.size(14.dp),
                                             strokeWidth = 1.5.dp,
@@ -1683,8 +1707,8 @@ fun ProfilesTab(
                                         )
                                     } else {
                                         Icon(
-                                            imageVector = Icons.Filled.SignalCellularAlt,
-                                            contentDescription = "Проверить пинг",
+                                            imageVector = Icons.Rounded.NetworkCheck,
+                                            contentDescription = "Проверить соединение",
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
@@ -2001,6 +2025,30 @@ fun ProfilesTab(
         }
     }
 
+    diagProfileId?.let { id ->
+        val profile = profiles.firstOrNull { it.id == id }
+        if (profile == null) {
+            diagProfileId = null
+        } else {
+            val diagState = com.wdtt.client.ProfileDiagnostics.states[id] ?: com.wdtt.client.DiagnosticsState()
+            DiagnosticsSheet(
+                state = diagState,
+                tunnelActive = true,
+                onRun = { checkProfile(profile) },
+                onAction = {},
+                onCopy = {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val report = "Профиль: ${profile.name}\n" + com.wdtt.client.ConnectionDiagnostics.reportText(diagState)
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Проверка профиля", report))
+                    Toast.makeText(context, "Отчёт скопирован — паролей и ключей в нём нет", Toast.LENGTH_SHORT).show()
+                },
+                onDismiss = { diagProfileId = null },
+                title = profile.name,
+                standalone = true,
+            )
+        }
+    }
+
     showExportSheet?.let { profile ->
         val exportDtlsPort = if (savedManualPortsEnabled) savedServerDtlsPort else 56000
         ExportProfileSheet(
@@ -2065,7 +2113,8 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
                 vkHashes = hashes,
                 workersPerHash = workers,
                 listenPort = port,
-                password = pass
+                password = pass,
+                diagKey = uri.getQueryParameter("dk").orEmpty().trim()
             )
         } catch (e: Exception) {
             // fallback
@@ -2099,7 +2148,8 @@ private fun parseQrConfig(rawText: String): ConnectionProfile? {
                 vkHashes = hashes,
                 workersPerHash = workers,
                 listenPort = port,
-                password = pass
+                password = pass,
+                diagKey = jsonObj.optString("diagKey", jsonObj.optString("dk", "")).trim()
             )
         } catch (e: Exception) {
             // invalid json

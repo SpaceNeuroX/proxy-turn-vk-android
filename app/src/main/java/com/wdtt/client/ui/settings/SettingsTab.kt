@@ -31,6 +31,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.rounded.NetworkCheck
+import androidx.compose.runtime.snapshotFlow
+import com.wdtt.client.ConnectionDiagnostics
+import com.wdtt.client.DiagSeverity
+import com.wdtt.client.WDTTColors
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -176,7 +182,14 @@ fun SettingsTabContent(
     val savedSocksPassword by settingsStore.socksPassword.collectAsStateWithLifecycle(initialValue = "")
     var socksUsernameInput by rememberSaveable { mutableStateOf("") }
     var socksPasswordInput by rememberSaveable { mutableStateOf("") }
-    val turnTcpEnabled by settingsStore.turnTcpEnabled.collectAsStateWithLifecycle(initialValue = true)
+    val turnTransport by settingsStore.turnTransport.collectAsStateWithLifecycle(
+        initialValue = SettingsStore.TURN_TRANSPORT_TCP
+    )
+    val savedTurnHosts by settingsStore.turnHosts.collectAsStateWithLifecycle(initialValue = "")
+    var turnHostsInput by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(savedTurnHosts) {
+        turnHostsInput = savedTurnHosts
+    }
     val serverRawPort by settingsStore.serverRawPort.collectAsStateWithLifecycle(initialValue = 56003)
     var serverRawPortInput by rememberSaveable { mutableStateOf("56003") }
     LaunchedEffect(serverRawPort) {
@@ -224,6 +237,9 @@ fun SettingsTabContent(
     var serverDtlsPortInput by rememberSaveable { mutableStateOf("56000") }
     var serverWgPortInput by rememberSaveable { mutableStateOf("56001") }
     var showAppSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    val diagState by TunnelManager.diagnostics.collectAsStateWithLifecycle()
+    val diagActiveWorkers by TunnelManager.activeWorkers.collectAsStateWithLifecycle()
+    var showDiagSheet by rememberSaveable { mutableStateOf(false) }
     val openAppSettingsRequest by TunnelManager.openAppSettingsRequest.collectAsStateWithLifecycle()
     var lastHandledOpenSettings by rememberSaveable { mutableLongStateOf(0L) }
     LaunchedEffect(openAppSettingsRequest) {
@@ -522,12 +538,13 @@ fun SettingsTabContent(
         }
     }
 
-    fun requestVpnAndStart() {
+    /** switchToLogs=false — запуск из диагностики: пользователь смотрит на проверку, не уводим его в «Логи». */
+    fun requestVpnAndStart(switchToLogs: Boolean = true) {
         (context as? com.wdtt.client.MainActivity)?.requestNotificationPermissionIfNeeded()
         TunnelManager.beginConnecting()
         val proceed = {
             // Переключение на «Логи» только когда VPN уже выдан — иначе launcher вкладки уничтожается.
-            if (autoSwitchToLogs) {
+            if (autoSwitchToLogs && switchToLogs) {
                 onConnectRequested()
             }
             startTunnelService()
@@ -545,6 +562,68 @@ fun SettingsTabContent(
             TunnelManager.cancelConnectingIfNeeded()
             Toast.makeText(context, "VPN-разрешение недоступно", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /** Перезапуск туннеля после смены настроек из диагностики. */
+    fun restartTunnelForDiagnostics() {
+        TunnelManager.scope.launch {
+            val wasActive = TunnelManager.running.value || TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value
+            if (wasActive) {
+                context.startService(Intent(context, TunnelService::class.java).apply { action = "STOP" })
+                delay(800)
+            }
+            withContext(Dispatchers.Main) { requestVpnAndStart(switchToLogs = false) }
+        }
+    }
+
+    fun runDiagnosticsAction(action: String) {
+        showDiagSheet = false
+        TunnelManager.dismissDiagnostics()
+        scope.launch {
+            when {
+                action == "switch_raw" || action == "switch_wg" -> {
+                    val target = if (action == "switch_raw") SettingsStore.CONNECTION_MODE_RAWTUN else SettingsStore.CONNECTION_MODE_VPN
+                    settingsStore.saveConnectionMode(target)
+                    // requestVpnAndStart берёт режим из состояния экрана — ждём, пока оно обновится.
+                    withTimeoutOrNull(2_000) { snapshotFlow { connectionMode }.first { it == target } }
+                    Toast.makeText(context, if (target == SettingsStore.CONNECTION_MODE_RAWTUN) "Режим: Raw" else "Режим: WG", Toast.LENGTH_SHORT).show()
+                }
+                action == "switch_tcp" || action == "switch_udp" -> {
+                    val transport = if (action == "switch_tcp") SettingsStore.TURN_TRANSPORT_TCP else SettingsStore.TURN_TRANSPORT_UDP
+                    settingsStore.saveTurnTransport(transport)
+                    Toast.makeText(context, "TURN через ${transport.uppercase()}", Toast.LENGTH_SHORT).show()
+                }
+                action.startsWith("use_turn:") -> {
+                    val host = action.substringAfter(':')
+                    settingsStore.saveTurnHosts(host)
+                    Toast.makeText(context, "TURN закреплён: $host. Снять можно в настройках сети.", Toast.LENGTH_LONG).show()
+                }
+            }
+            restartTunnelForDiagnostics()
+        }
+    }
+
+    fun runDiagnosticsNow() {
+        if (!TunnelManager.requestDiagnostics()) {
+            // Процесса нет — проверка стартует вместе с подключением.
+            requestVpnAndStart(switchToLogs = false)
+        }
+    }
+
+    if (showDiagSheet) {
+        val tunnelActive = tunnelRunning || tunnelConnecting || tunnelReconnecting
+        DiagnosticsSheet(
+            state = diagState,
+            tunnelActive = tunnelActive,
+            onRun = { runDiagnosticsNow() },
+            onAction = { runDiagnosticsAction(it) },
+            onCopy = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Проверка соединения qWDTT", ConnectionDiagnostics.reportText(diagState)))
+                Toast.makeText(context, "Отчёт скопирован — паролей и ключей в нём нет", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showDiagSheet = false },
+        )
     }
 
     // ═══ Dialogs ═══
@@ -1406,8 +1485,8 @@ fun SettingsTabContent(
                     }
 
                     // Применимо ко всем режимам — меняет только транспорт до
-                    // TURN-relay (TCP или UDP), сама TURN/RTP-obfs логика не
-                    // меняется. TCP по умолчанию.
+                    // TURN-relay VK (UDP или TCP), сама TURN/RTP-obfs логика
+                    // не меняется. TCP по умолчанию.
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             "TURN-транспорт",
@@ -1418,29 +1497,51 @@ fun SettingsTabContent(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            FilterChip(
-                                selected = turnTcpEnabled,
-                                onClick = {
-                                    if (!tunnelRunning) {
-                                        scope.launch { settingsStore.saveTurnTcpEnabled(true) }
-                                    }
-                                },
-                                label = { Text("TCP") },
-                                enabled = !tunnelRunning,
-                                modifier = Modifier.weight(1f)
-                            )
-                            FilterChip(
-                                selected = !turnTcpEnabled,
-                                onClick = {
-                                    if (!tunnelRunning) {
-                                        scope.launch { settingsStore.saveTurnTcpEnabled(false) }
-                                    }
-                                },
-                                label = { Text("UDP") },
-                                enabled = !tunnelRunning,
-                                modifier = Modifier.weight(1f)
-                            )
+                            listOf(
+                                SettingsStore.TURN_TRANSPORT_UDP to "UDP",
+                                SettingsStore.TURN_TRANSPORT_TCP to "TCP",
+                            ).forEach { (value, label) ->
+                                FilterChip(
+                                    selected = turnTransport == value,
+                                    onClick = {
+                                        if (!tunnelRunning) {
+                                            scope.launch { settingsStore.saveTurnTransport(value) }
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                    enabled = !tunnelRunning,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
+                        Text(
+                            if (turnTransport == SettingsStore.TURN_TRANSPORT_UDP) {
+                                "Самый быстрый. Если не подключается или скорость низкая — попробуйте TCP."
+                            } else {
+                                "Помогает, если провайдер душит UDP (например, Ростелеком)."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = turnHostsInput,
+                            onValueChange = { value ->
+                                val clean = SettingsStore.sanitizeTurnHosts(value)
+                                turnHostsInput = clean
+                                scope.launch { settingsStore.saveTurnHosts(clean) }
+                            },
+                            label = { Text("Свои TURN-IP (необязательно)") },
+                            placeholder = { Text("1.2.3.4, 5.6.7.8:3478") },
+                            supportingText = {
+                                Text("Вместо адресов, которые выдаёт VK. Через запятую, порт можно не указывать.")
+                            },
+                            singleLine = true,
+                            enabled = !tunnelRunning,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            shape = RoundedCornerShape(14.dp),
+                        )
                     }
 
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1802,15 +1903,31 @@ fun SettingsTabContent(
                 color = MaterialTheme.colorScheme.primary
             )
             
-            // Иконка настроек (шестеренка)
-            IconButton(
-                onClick = { showAppSettingsDialog = true }
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Настройки оформления и инфо",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Проверка соединения: цвет иконки — итог последней проверки.
+                val diagTint = when {
+                    diagState.running || diagState.requested -> MaterialTheme.colorScheme.primary
+                    diagState.verdict?.severity == DiagSeverity.ERROR -> MaterialTheme.colorScheme.error
+                    diagState.verdict?.severity == DiagSeverity.WARN -> WDTTColors.warning
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                IconButton(onClick = { showDiagSheet = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.NetworkCheck,
+                        contentDescription = "Проверка соединения",
+                        tint = diagTint
+                    )
+                }
+                // Иконка настроек (шестеренка)
+                IconButton(
+                    onClick = { showAppSettingsDialog = true }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Настройки оформления и инфо",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -1968,44 +2085,39 @@ fun SettingsTabContent(
             // Компактный переключатель режима подключения прямо рядом с кнопкой
             // "Подключить" — тот же connectionMode, что и подробный блок "Режим
             // подключения" выше в списке настроек, просто на виду без прокрутки.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_VPN,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_VPN) }
-                        }
-                    },
-                    label = { Text("WG") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_RAWTUN,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_RAWTUN) }
-                        }
-                    },
-                    label = { Text("Raw") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = connectionMode == SettingsStore.CONNECTION_MODE_SOCKS,
-                    onClick = {
-                        if (!tunnelRunning) {
-                            scope.launch { settingsStore.saveConnectionMode(SettingsStore.CONNECTION_MODE_SOCKS) }
-                        }
-                    },
-                    label = { Text("SOCKS5") },
-                    enabled = !tunnelRunning,
-                    modifier = Modifier.weight(1f)
-                )
+            // SOCKS5 на главном экране не предлагаем — его случайно включали
+            // вместо VPN. Выбирается в «Режиме подключения» ниже; если уже
+            // выбран — показываем третьим сегментом, чтобы было видно, что активно.
+            val quickModes = buildList {
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_VPN, "WG"))
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_RAWTUN, "Raw"))
+                if (connectionMode == SettingsStore.CONNECTION_MODE_SOCKS) {
+                    add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_SOCKS, "SOCKS5"))
+                }
             }
+            ConnectionModeSwitch(
+                options = quickModes,
+                selected = connectionMode,
+                // Во время работы туннеля смена режима переподключает его
+                // (TunnelService SWITCH_MODE). Пока идёт подключение — ждём его
+                // итога; из SOCKS5 на ходу не переключаем: нужен запрос VPN.
+                enabled = !tunnelConnecting && !tunnelReconnecting &&
+                    !(tunnelRunning && connectionMode == SettingsStore.CONNECTION_MODE_SOCKS),
+                onSelect = { mode ->
+                    if (mode != SettingsStore.CONNECTION_MODE_SOCKS) {
+                        if (tunnelRunning) {
+                            context.startService(
+                                Intent(context, TunnelService::class.java).apply {
+                                    action = "SWITCH_MODE"
+                                    putExtra("connection_mode", mode)
+                                }
+                            )
+                        } else if (!tunnelConnecting) {
+                            scope.launch { settingsStore.saveConnectionMode(mode) }
+                        }
+                    }
+                },
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2083,6 +2195,19 @@ fun SettingsTabContent(
                     )
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = shouldShowDiagnosticsCard(diagState, diagActiveWorkers),
+            enter = expandVertically(tween(260)) + fadeIn(tween(260)),
+            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+        ) {
+            DiagnosticsCard(
+                state = diagState,
+                onOpen = { showDiagSheet = true },
+                onAction = { runDiagnosticsAction(it) },
+                onDismiss = { TunnelManager.dismissDiagnostics() },
+            )
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
@@ -2892,7 +3017,9 @@ fun HashesDialog(
                         Triple("1", h1) { v: String -> h1 = v },
                         Triple("2", h2) { v: String -> h2 = v },
                         Triple("3", h3) { v: String -> h3 = v },
-                        Triple("4", h4) { v: String -> h4 = v }
+                        Triple("4", h4) { v: String -> h4 = v },
+                        Triple("5", h5) { v: String -> h5 = v },
+                        Triple("6", h6) { v: String -> h6 = v }
                     ).take(SettingsStore.MAX_VK_HASHES).forEachIndexed { idx, (label, value, onChange) ->
                         HashSlotCard(
                             slot = idx + 1,
@@ -3231,9 +3358,16 @@ private fun GoDnsSettingsSection(
     var checkResultText by remember { mutableStateOf<String?>(null) }
     var checkResultOk by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // DNS текущей сети: перечитываем при открытии списка — сеть могла смениться.
+    var networkDns by remember { mutableStateOf(com.wdtt.client.NetworkDns.current(context)) }
+    LaunchedEffect(expanded, goDnsPreset) {
+        networkDns = com.wdtt.client.NetworkDns.current(context)
+    }
 
     val udpPresets = remember {
         listOf(
+            "operator" to "Операторский DNS",
             "yandex" to "Яндекс DNS",
             "cloudflare" to "Cloudflare",
             "google" to "Google DNS",
@@ -3257,6 +3391,8 @@ private fun GoDnsSettingsSection(
             "doh-custom" -> SettingsStore.goDnsDisplay("doh-custom", goDnsDohCustomInput).servers
                 .joinToString(" · ")
                 .ifBlank { "укажите URL ниже" }
+            "operator" -> networkDns.joinToString(" · ")
+                .ifBlank { "DNS вашей сети: оператора или Wi-Fi" }
             else -> SettingsStore.goDnsDisplay(preset).servers.joinToString(" · ")
         }
     }
@@ -3279,7 +3415,8 @@ private fun GoDnsSettingsSection(
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            "Резолв login.vk.ru и api.vk.me при подключении.",
+            "Резолв login.vk.ru и api.vk.me при подключении. Если выбранный DNS не отвечает, " +
+                "используется DNS вашей сети (оператора или Wi-Fi).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -3406,10 +3543,12 @@ private fun GoDnsSettingsSection(
                     isCheckingDns = true
                     checkResultText = null
                     try {
+                        networkDns = com.wdtt.client.NetworkDns.current(context)
                         val result = com.wdtt.client.GoDnsProbe.checkPreset(
                             preset = goDnsPreset,
                             customRaw = goDnsCustomInput,
                             dohCustomRaw = goDnsDohCustomInput,
+                            networkDns = networkDns,
                         )
                         checkResultOk = result.reachable
                         checkResultText = if (result.reachable) {

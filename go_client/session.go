@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -27,10 +26,7 @@ const (
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
 	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
-	// keepaliveInterval: 1с (как у референсного клиента) — агрессивнее держит
-	// TURN permission/NAT-маппинг "тёплым" на каждом из 18-108 relay-сокетов
-	// сессии, чем прежние 15с/5с.
-	keepaliveInterval = 10 * time.Second
+	// keepaliveInterval и режим экрана — в liveness.go.
 	// keepaliveMinSize/keepaliveMaxSize: keepalive-пакет теперь не
 	// фиксированного размера (было 1 байт постоянно) — случайная длина
 	// 25-44 байта имитирует "тишину" OPUS в реальном звонке; постоянный
@@ -96,8 +92,20 @@ func (c *obfsDirectConn) SetDeadline(t time.Time) error      { return c.relay.Se
 func (c *obfsDirectConn) SetReadDeadline(t time.Time) error  { return c.relay.SetReadDeadline(t) }
 func (c *obfsDirectConn) SetWriteDeadline(t time.Time) error { return c.relay.SetWriteDeadline(t) }
 
-// Handshake semaphore: limit to 3 concurrent DTLS handshakes
-var handshakeSem = make(chan struct{}, 3)
+// handshakeSem ограничивает одновременные DTLS-рукопожатия. Было 3: на
+// 18+ потоках рукопожатия шли тройками, а одно зависшее держало слот до
+// таймаута. Рукопожатие — несколько пакетов через VK и одна ECDSA-подпись,
+// так что 16 параллельно не нагружают даже слабый телефон.
+var handshakeSem = make(chan struct{}, 16)
+
+// dtlsHandshakeTimeout — сколько ждать рукопожатие. Через VK оно занимает
+// доли секунды; если за 20 с (с повтором полётов каждые 0,5 с) не прошло —
+// дальше ждать бесполезно, лучше переподключить поток. Было 50 с.
+const dtlsHandshakeTimeout = 20 * time.Second
+
+// dtlsFlightInterval — как часто DTLS повторяет потерянный полёт
+// (по умолчанию в pion 1 с).
+const dtlsFlightInterval = 500 * time.Millisecond
 
 // NullLoggerFactory подавляет логи pion
 type NullLoggerFactory struct{}
@@ -116,44 +124,6 @@ func (n *NullLogger) Warn(_ string)                     {}
 func (n *NullLogger) Warnf(_ string, _ ...interface{})  {}
 func (n *NullLogger) Error(_ string)                    {}
 func (n *NullLogger) Errorf(_ string, _ ...interface{}) {}
-
-// connectedUDPConn — обёртка для connected UDP socket → PacketConn
-type connectedUDPConn struct{ *net.UDPConn }
-
-func (c *connectedUDPConn) WriteTo(p []byte, _ net.Addr) (int, error) { return c.Write(p) }
-
-// dialTURNConn открывает сокет до TURN-сервера и оборачивает его в
-// net.PacketConn, которого ждёт turn.ClientConfig.Conn. По умолчанию — UDP
-// (как раньше). Если tcp=true, поднимает обычное TCP-соединение и
-// оборачивает его через turn.NewSTUNConn — это штатная, задокументированная
-// pion/turn возможность (см. examples/turn-client/tcp), а не самописный
-// протокол: NewSTUNConn сам разбирает STUN/ChannelData framing поверх
-// потокового TCP. Нужен на сетях (замечено на Ростелекоме), где UDP до
-// TURN-relay душится/дропается, а TCP до того же relay проходит — сравни
-// github.com/anton48/vk-turn-proxy-ios, который к той же VK/OK TURN-инфре
-// (calls.okcdn.ru) по умолчанию ходит именно через TCP.
-func dialTURNConn(turnAddr string, tcp bool) (net.PacketConn, io.Closer, error) {
-	if !tcp {
-		resolved, err := net.ResolveUDPAddr("udp", turnAddr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("резолв TURN: %w", err)
-		}
-		c, err := net.DialUDP("udp", nil, resolved)
-		if err != nil {
-			return nil, nil, fmt.Errorf("подключение TURN UDP: %w", err)
-		}
-		_ = c.SetReadBuffer(socketBufSize)
-		_ = c.SetWriteBuffer(socketBufSize)
-		return &connectedUDPConn{c}, c, nil
-	}
-
-	d := net.Dialer{Timeout: 10 * time.Second}
-	c, err := d.Dial("tcp", turnAddr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("подключение TURN TCP: %w", err)
-	}
-	return turn.NewSTUNConn(c), c, nil
-}
 
 func RunSession(
 	ctx context.Context,
@@ -175,34 +145,19 @@ func RunSession(
 	var firstWireWrite uint32
 	var firstWireRead uint32
 
-	if len(creds.TurnURLs) == 0 {
-		return false, fmt.Errorf("нет TURN URL в учетных данных")
-	}
-	selectedURL := creds.TurnURLs[sessionID%len(creds.TurnURLs)]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("разбор TURN URL %q: %w", selectedURL, err)
+		return false, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return false, err
 	}
 	defer turnConnCloser.Close()
 
-	if tp.TCPTransport {
-		log.Printf("[СЕССИЯ #%d] TURN TCP (%s)", sessionID, turnAddr)
-	} else {
-		log.Printf("[СЕССИЯ #%d] TURN UDP (%s)", sessionID, turnAddr)
-	}
+	log.Printf("[СЕССИЯ #%d] TURN %s (%s)", sessionID, strings.ToUpper(target.Transport), turnAddr)
 
 	// RequestedAddressFamily
 	var addrFamily turn.RequestedAddressFamily
@@ -427,6 +382,7 @@ func RunSession(
 			CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 			ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
 			MTU:                   1100,
+			FlightInterval:        dtlsFlightInterval,
 			// No ServerName (SNI) — less detectable by DPI
 		}
 
@@ -436,7 +392,7 @@ func RunSession(
 			return false, fmt.Errorf("DTLS клиент: %w", err)
 		}
 
-		hctx, hcancel := context.WithTimeout(sessCtx, 50*time.Second)
+		hctx, hcancel := context.WithTimeout(sessCtx, dtlsHandshakeTimeout)
 		log.Printf("[ВОРКЕР #%d] [DTLS] Рукопожатие (Handshake)...", sessionID)
 		err = dtlsConn.HandshakeContext(hctx)
 		hcancel()
@@ -551,19 +507,34 @@ func RunSession(
 	// конкурирующая за conn с основным Writer'ом ниже) — кладётся в
 	// slot.PrioCh неблокирующе, тем же путём, что и мелкие ACK-пакеты, и
 	// уходит через единственную writer-горутину.
+	liveness := newSessionLiveness(time.Now())
 	go func() {
 		defer proxyWg.Done()
-		t := time.NewTicker(keepaliveInterval)
+		t := time.NewTicker(livenessTick)
 		defer t.Stop()
 
 		didBytes := make([]byte, 16)
 		copy(didBytes, deviceID)
+		planner := newLivenessPlanner(liveness, time.Now())
 
 		for {
 			select {
 			case <-sessCtx.Done():
 				return
-			case <-t.C:
+			case now := <-t.C:
+				st := planner.step(now, lowPowerMode.Load())
+				if st.dead {
+					log.Printf("[ВОРКЕР #%d] Сервер не отвечает %d с — поток мёртв, переподключаем", sessionID, int(st.silent.Seconds()))
+					select {
+					case sessionErrCh <- fmt.Errorf("поток не отвечает %d с", int(st.silent.Seconds())):
+					default:
+					}
+					sessCancel()
+					return
+				}
+				if !st.sendKeepalive {
+					continue
+				}
 				size := keepaliveMinSize + rand.Intn(keepaliveMaxSize)
 				pkt := getPktBuf(size)
 				pkt[0] = keepaliveByte
@@ -667,10 +638,12 @@ func RunSession(
 				return
 			}
 
-			// Skip keepalive pong from server
+			// Ответ сервера на keepalive — пульс для проверки живости.
 			if n == 1 && b[0] == keepaliveByte {
+				liveness.notePong(time.Now())
 				continue
 			}
+			liveness.noteRx(time.Now())
 
 			if atomic.CompareAndSwapUint32(&firstWireRead, 0, 1) {
 				log.Printf("[ВОРКЕР #%d] [ДЕБАГ] Получен ПЕРВЫЙ пакет из соединения (%d байт)", sessionID, n)
@@ -720,24 +693,13 @@ func RunPing(
 ) (int64, error) {
 	startPing := time.Now()
 
-	if len(creds.TurnURLs) == 0 {
-		return 0, fmt.Errorf("нет TURN URL")
-	}
-	selectedURL := creds.TurnURLs[0]
-
-	urlhost, urlport, err := net.SplitHostPort(selectedURL)
+	target, err := selectTurnTarget(tp, creds.TurnURLs, 0)
 	if err != nil {
 		return 0, err
 	}
-	if tp.Host != "" {
-		urlhost = tp.Host
-	}
-	if tp.Port != "" {
-		urlport = tp.Port
-	}
-	turnAddr := net.JoinHostPort(urlhost, urlport)
+	turnAddr := target.Addr
 
-	turnConn, turnConnCloser, err := dialTURNConn(turnAddr, tp.TCPTransport)
+	turnConn, turnConnCloser, err := dialTURNConn(ctx, target)
 	if err != nil {
 		return 0, err
 	}
@@ -863,6 +825,7 @@ func RunPing(
 		CipherSuites:          []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
 		ConnectionIDGenerator: dtls.OnlySendCIDGenerator(),
 		MTU:                   1100,
+		FlightInterval:        dtlsFlightInterval,
 	}
 
 	dtlsConn, err := dtls.Client(pipeB, peer, dtlsCfg)

@@ -87,21 +87,22 @@ type WorkerSlot struct {
 }
 
 type Dispatcher struct {
-	localConn    net.PacketConn
-	tunFile      *os.File // не nil в -mode rawtun: сырые IP-пакеты вместо локального WG-loopback
-	ready        chan struct{}
-	clientAddr   atomic.Pointer[net.Addr]
-	mu           sync.Mutex
-	workers      []*WorkerSlot
-	rrIndex      int
-	rrCount      int   // сколько пакетов отправлено в текущий worker в рамках текущего chunk'а
-	lastPktTime  int64 // unix millis последнего пакета — для сброса chunk'а после паузы
-	chunkStartTs int64 // unix millis начала текущего chunk'а — для maxDwellMS
-	ReturnCh     chan []byte
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	stats        *Stats
+	localConn     net.PacketConn
+	tunFile       *os.File // не nil в -mode rawtun: сырые IP-пакеты вместо локального WG-loopback
+	ready         chan struct{}
+	clientAddr    atomic.Pointer[net.Addr]
+	pinner        flowPinner // мелкие UDP-потоки → один воркер (только rawtun), см. flow_pin.go
+	mu            sync.Mutex
+	workers       []*WorkerSlot
+	rrIndex       int
+	rrCount       int   // сколько пакетов отправлено в текущий worker в рамках текущего chunk'а
+	lastPktTime   int64 // unix millis последнего пакета — для сброса chunk'а после паузы
+	chunkStartTs  int64 // unix millis начала текущего chunk'а — для maxDwellMS
+	ReturnCh      chan []byte
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	stats         *Stats
 	firstPktUp    uint32
 	firstPktDown  uint32
 	firstReadErr  uint32
@@ -293,6 +294,14 @@ func (d *Dispatcher) readLoop() {
 			d.rrIndex = (d.rrIndex + 1) % nw
 			d.rrCount = 0
 			d.chunkStartTs = now
+		}
+
+		// rawtun: мелкий UDP (игры, голос, DNS) держим на одном воркере,
+		// чтобы пакеты одного потока не перемешивались между relay.
+		if d.tunFile != nil && d.pinner.send(d.workers, pkt, now) {
+			atomic.AddUint64(&d.tunSentCount, 1)
+			d.mu.Unlock()
+			continue
 		}
 
 		// Маленькие пакеты (вероятно ACK) — отдельный приоритетный канал с

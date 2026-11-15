@@ -775,7 +775,12 @@ private fun PasswordDetailsSheet(
         val peerEsc = URLEncoder.encode(peer, "UTF-8")
         val hashesEsc = URLEncoder.encode(entry.vkHash, "UTF-8")
         val passEsc = URLEncoder.encode(entry.password, "UTF-8")
-        "qwdtt://config?name=$nameEsc&peer=$peerEsc&hashes=$hashesEsc&workers=18&port=9000&pass=$passEsc"
+        val extra = buildString {
+            if (entry.diagKey.isNotBlank()) append("&dk=").append(URLEncoder.encode(entry.diagKey, "UTF-8"))
+            if (entry.rawPort > 0) append("&raw=").append(entry.rawPort)
+            if (entry.directPort > 0) append("&direct=").append(entry.directPort)
+        }
+        "qwdtt://config?name=$nameEsc&peer=$peerEsc&hashes=$hashesEsc&workers=18&port=9000&pass=$passEsc$extra"
     }
     val wdttLink = remember(entry, host, port) {
         // wdtt://<server_ip>:<dtls_port>:<wg_port>:<local_port>:<password>:<vk_hash>

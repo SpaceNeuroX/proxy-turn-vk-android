@@ -29,7 +29,6 @@ import kotlinx.coroutines.flow.collectLatest
 
 private const val TUNNEL_NOTIFICATION_CHANNEL_ID = NotificationHelper.TUNNEL_CHANNEL_ID
 private const val TUNNEL_NOTIFICATION_ID = 1
-private const val RAW_WAKE_RESTART_THRESHOLD_MS = 60_000L
 
 class TunnelService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
@@ -149,8 +148,11 @@ class TunnelService : Service() {
                             socksUsername = socksUsername,
                             socksPassword = socksPassword,
                             noDtls = noDtlsEnabled,
-                            turnTcp = store.turnTcpEnabled.first(),
-                            detailedLogs = store.detailedLogs.first()
+                            turnTransport = store.turnTransport.first(),
+                            turnHosts = store.turnHosts.first(),
+                            detailedLogs = store.detailedLogs.first(),
+                            diagKey = store.diagKey.first(),
+                            diagPorts = diagPortsArg(basePeer, serverDtlsPort, serverDirectPort, serverRawPort)
                         )
                         launch(Dispatchers.Main) {
                             startTunnel(
@@ -166,6 +168,7 @@ class TunnelService : Service() {
                 }
             }
             "STOP" -> stopTunnel()
+            "SWITCH_MODE" -> switchMode(intent.getStringExtra("connection_mode"))
             "DEPLOY_START" -> {
                 val notification = createNotification("Установка на сервер...", "DEPLOY_CANCEL", "Отменить")
                 startPersistentForeground(notification)
@@ -232,8 +235,11 @@ class TunnelService : Service() {
                     socksUsername = store.socksUsername.first(),
                     socksPassword = store.socksPassword.first(),
                     noDtls = noDtlsEnabled,
-                    turnTcp = store.turnTcpEnabled.first(),
-                    detailedLogs = store.detailedLogs.first()
+                    turnTransport = store.turnTransport.first(),
+                    turnHosts = store.turnHosts.first(),
+                    detailedLogs = store.detailedLogs.first(),
+                    diagKey = store.diagKey.first(),
+                    diagPorts = diagPortsArg(basePeer, serverDtlsPort, serverDirectPort, serverRawPort)
                 )
                 if (params.peer.isNotEmpty() && params.vkHashes.isNotEmpty()) {
                     launch(Dispatchers.Main) {
@@ -270,6 +276,33 @@ class TunnelService : Service() {
         startStatsUpdater()
     }
 
+    /**
+     * Смена режима (WG ↔ Raw) при включённом туннеле: сервис остаётся в
+     * foreground, туннель останавливается и сразу поднимается заново с
+     * сохранёнными настройками — как «Остановить» → «Подключить», но одним
+     * нажатием. SOCKS5 сюда не попадает: ему не нужен VPN, а обратному
+     * переходу нужно разрешение VPN — это делается обычной кнопкой.
+     */
+    private fun switchMode(rawMode: String?) {
+        val mode = SettingsStore.normalizeConnectionMode(rawMode ?: return)
+        if (mode == SettingsStore.CONNECTION_MODE_SOCKS) return
+        val current = TunnelManager.currentConnectionMode()
+        if (current == null || current == SettingsStore.CONNECTION_MODE_SOCKS) return
+        if (current == mode) return
+        val appContext = applicationContext
+        TunnelManager.scope.launch {
+            SettingsStore(appContext).saveConnectionMode(mode)
+            launch(Dispatchers.Main) {
+                val title = if (mode == SettingsStore.CONNECTION_MODE_RAWTUN) "Raw" else "WG"
+                updateJob?.cancel()
+                TunnelManager.stop(force = true)
+                TunnelManager.beginConnecting("Переключаемся на $title…")
+                updateNotification("Переключаемся на $title…")
+                onStartCommand(Intent(appContext, TunnelService::class.java).apply { action = "START_SAVED" }, 0, 0)
+            }
+        }
+    }
+
     private fun stopTunnel() {
         updateJob?.cancel()
 
@@ -285,6 +318,16 @@ class TunnelService : Service() {
         QuickToggleTileService.requestTileUpdate(applicationContext)
         AppShortcuts.refreshAsync(applicationContext)
         stopSelf()
+    }
+
+    /**
+     * Порты сервера для диагностики (go_client -diag-ports). Порт WG берём из
+     * адреса профиля, если он там есть (ссылки бота кладут реальный порт),
+     * иначе из настроек.
+     */
+    private fun diagPortsArg(basePeer: String, dtlsPort: Int, directPort: Int, rawPort: Int): String {
+        val dtls = PeerAddress.port(basePeer) ?: dtlsPort
+        return "dtls=$dtls,direct=$directPort,raw=$rawPort"
     }
 
     private fun setupNetworkCallback() {
@@ -496,12 +539,14 @@ class TunnelService : Service() {
 
     private fun setupScreenStateReceiver() {
         deviceWasInteractive = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
+        TunnelManager.setScreenOn(deviceWasInteractive)
         if (!deviceWasInteractive) screenOffAtMs = System.currentTimeMillis()
         screenStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: Intent?) {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_OFF -> {
                         deviceWasInteractive = false
+                        TunnelManager.setScreenOn(false)
                         screenOffAtMs = System.currentTimeMillis()
                         wakeRecoveryJob?.cancel()
                         wakeRecoveryJob = null
@@ -510,6 +555,7 @@ class TunnelService : Service() {
                     }
                     Intent.ACTION_SCREEN_ON -> {
                         deviceWasInteractive = true
+                        TunnelManager.setScreenOn(true)
                         val now = System.currentTimeMillis()
                         val screenOffDurationMs = if (screenOffAtMs > 0L) now - screenOffAtMs else 0L
                         screenOffAtMs = 0L
@@ -524,43 +570,34 @@ class TunnelService : Service() {
         })
     }
 
+    /**
+     * После пробуждения потоки сами проверяют себя (go_client/liveness.go):
+     * при включении экрана каждый сразу шлёт keepalive, мёртвые снимаются
+     * за несколько секунд и переподнимаются, живые остаются. Поэтому здесь
+     * только страховка: если через 25 с не ожило ничего — перезапускаем
+     * транспорт. Раньше Raw после минуты сна перезапускался всегда, а это
+     * ~6 с без связи и пачка запросов кредов к VK на каждое включение экрана.
+     */
     private fun scheduleWakeRecovery(screenOffDurationMs: Long) {
         wakeRecoveryJob?.cancel()
-        val restartRawTransport = TunnelManager.isRawTunModeActive() &&
-            screenOffDurationMs >= RAW_WAKE_RESTART_THRESHOLD_MS
-        wakeGraceUntilMs = System.currentTimeMillis() + if (restartRawTransport) 45_000L else 30_000L
+        wakeGraceUntilMs = System.currentTimeMillis() + 30_000L
         wakeRecoveryJob = TunnelManager.scope.launch {
             if (!TunnelManager.running.value || isTunnelPaused) return@launch
-            if (restartRawTransport) {
-                networkRecoveryJob?.cancel()
-                TunnelManager.addNetworkLog("[СОН] RAW был в фоне ${screenOffDurationMs / 1000} сек. Обновляем транспортные потоки.")
-                val validationDeadline = System.currentTimeMillis() + 20_000L
-                while (!hasValidatedUnderlyingNetwork() && System.currentTimeMillis() < validationDeadline) {
-                    if (!deviceWasInteractive || !TunnelManager.running.value || isTunnelPaused) return@launch
-                    delay(500)
-                }
-                if (!deviceWasInteractive || !TunnelManager.running.value || isTunnelPaused ||
-                    !hasValidatedUnderlyingNetwork()) return@launch
-                delay(2_000)
-                if (!deviceWasInteractive || !TunnelManager.running.value || isTunnelPaused) return@launch
-                lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
-                updateNotification("Восстановление после сна...")
-                TunnelManager.restartTransport("пробуждение RAW после сна", force = true)
-                return@launch
-            }
-            TunnelManager.addNetworkLog("[СОН] Устройство проснулось; даём текущему VPN восстановиться без перезапуска.")
-            delay(30_000)
+            TunnelManager.addNetworkLog(
+                "[СОН] Устройство проснулось (экран был выключен ${screenOffDurationMs / 1000} с); потоки проверяют себя сами."
+            )
+            delay(25_000)
             if (!deviceWasInteractive || !TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return@launch
             if (TunnelManager.hasRecentTransportActivity(45_000L)) {
-                TunnelManager.addNetworkLog("[СОН] VPN подал свежие признаки жизни после пробуждения.")
+                TunnelManager.addNetworkLog("[СОН] Туннель работает после пробуждения.")
                 return@launch
             }
             val now = System.currentTimeMillis()
             if (now - lastNetworkRecoveryAttemptMs < 120_000L) return@launch
             lastNetworkRecoveryAttemptMs = now
             updateNotification("Восстановление после сна...")
-            TunnelManager.addNetworkLog("[СОН] VPN не ожил после пробуждения. Мягко переподключаем транспорт.")
-            TunnelManager.restartTransport()
+            TunnelManager.addNetworkLog("[СОН] Туннель не ожил после пробуждения. Перезапускаем транспорт.")
+            TunnelManager.restartTransport("пробуждение после сна", force = true)
         }
     }
 

@@ -279,7 +279,9 @@ func obfsIsRTPPacket(wire []byte) bool {
 // молчаливых ENOBUFS-дропов под всплеском нагрузки.
 const socketBufSize = 8 * 1024 * 1024
 
-func listenWrapped(addr *net.UDPAddr, keys *wrapKeyStore) (dtlsnet.PacketListener, error) {
+// listenWrapped поднимает UDP-листенер с RTP-obfs. name — "dtls", "direct"
+// или "raw": попадает в ответы на диагностические пробы и в журнал.
+func listenWrapped(name string, addr *net.UDPAddr, keys *wrapKeyStore) (dtlsnet.PacketListener, error) {
 	if keys == nil || keys.Count() == 0 {
 		return nil, errors.New("wrap: no active keys")
 	}
@@ -291,12 +293,14 @@ func listenWrapped(addr *net.UDPAddr, keys *wrapKeyStore) (dtlsnet.PacketListene
 	return &wrapPacketListener{
 		inner: dtlsnet.PacketListenerFromListener(inner),
 		keys:  keys,
+		name:  name,
 	}, nil
 }
 
 type wrapPacketListener struct {
 	inner dtlsnet.PacketListener
 	keys  *wrapKeyStore
+	name  string
 }
 
 func (l *wrapPacketListener) Accept() (net.PacketConn, net.Addr, error) {
@@ -304,7 +308,7 @@ func (l *wrapPacketListener) Accept() (net.PacketConn, net.Addr, error) {
 	if err != nil {
 		return pc, addr, err
 	}
-	return &wrapPacketConn{inner: pc, keys: l.keys}, addr, nil
+	return &wrapPacketConn{inner: pc, keys: l.keys, listener: l.name}, addr, nil
 }
 
 func (l *wrapPacketListener) Close() error   { return l.inner.Close() }
@@ -313,6 +317,7 @@ func (l *wrapPacketListener) Addr() net.Addr { return l.inner.Addr() }
 type wrapPacketConn struct {
 	inner     net.PacketConn
 	keys      *wrapKeyStore
+	listener  string // dtls / direct / raw — см. listenWrapped
 	key       []byte
 	keyID     string
 	bindingID string
@@ -369,10 +374,24 @@ func (c *wrapPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if atomic.LoadInt32(&c.selected) == 0 {
 		key, keyID, m, uErr := c.keys.Unwrap(raw, p)
 		if uErr != nil {
+			// Проба ключом диагностики сервера (см. netdiag.go): отвечаем и
+			// закрываем соединение, сессию по этому ключу не открываем.
+			if serverDiag.tryDiagKey(c, raw, p, addr) {
+				return 0, addr, errDiagnosticProbe
+			}
+			if obfsIsRTPPacket(raw) {
+				serverDiag.noteAuthFailure(c.listener, addr)
+			}
 			if atomic.CompareAndSwapInt32(&c.authLog, 0, 1) {
 				log.Printf("[WRAP] Отказ: RTP AEAD auth failed from %s (keys=%d)", addr.String(), c.keys.Count())
 			}
 			return 0, addr, uErr
+		}
+		if req, ok := parseDiagRequest(p[:m]); ok {
+			// Проба ключом пароля: пароль верный, сообщаем его статус.
+			serverDiag.answerDiagProbe(c, raw, req, key, keyID, addr)
+			zeroBytes(key)
+			return 0, addr, errDiagnosticProbe
 		}
 		cfg, cfgErr := NewObfsConfig("audio")
 		if cfgErr != nil {

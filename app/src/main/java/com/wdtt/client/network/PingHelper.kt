@@ -56,6 +56,9 @@ object PingHelper {
                 "-password", profile.password,
                 "-go-dns", goDnsArg,
             )
+            NetworkDns.current(context).takeIf { it.isNotEmpty() }?.let {
+                cmd += listOf("-dns-fallback", it.joinToString(","))
+            }
             android.util.Log.d("PingHelper", "Command: ${cmd.joinToString(" ") { if (it == profile.password) "***" else it }}")
 
             val processBuilder = ProcessBuilder(cmd)

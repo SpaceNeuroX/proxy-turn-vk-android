@@ -28,12 +28,14 @@ class SettingsStore(context: Context) {
         const val VK_ACCOUNT_MAX_WORKERS = 4
         /** Потоков в одной группе Go-клиента (workersPerGroup). */
         const val WORKERS_PER_VK_GROUP = 9
-        const val MAX_VK_HASHES = 4
+        const val MAX_VK_HASHES = 6
+        /** Потолок потоков Go-клиента (go_client/main.go, maxWorkers). */
+        const val MAX_TOTAL_WORKERS = 162
 
-        /** Макс. потоков: 27 на каждый хеш (1→27, 2→54, 3→81, 4→108). */
+        /** Макс. потоков: 27 на каждый хеш (1→27, 2→54 … 6→162). */
         fun maxAnonymousWorkers(hashCount: Int): Int {
             val n = hashCount.coerceIn(1, MAX_VK_HASHES)
-            return n * WORKERS_PER_VK_GROUP * 3
+            return (n * WORKERS_PER_VK_GROUP * 3).coerceAtMost(MAX_TOTAL_WORKERS)
         }
 
         private val Context.dataStore by preferencesDataStore("settings")
@@ -52,8 +54,12 @@ class SettingsStore(context: Context) {
         private val SERVER_DIRECT_PORT = intPreferencesKey("server_direct_port")
         /** Порт сервера для raw-IP режима (на сервере нужен -listen-raw). */
         private val SERVER_RAW_PORT = intPreferencesKey("server_raw_port")
-        /** Соединяться с TURN-relay по TCP вместо UDP (обход UDP-душения на некоторых сетях). */
+        /** Старая настройка (TCP вместо UDP), читается для миграции в TURN_TRANSPORT. */
         private val TURN_TCP_ENABLED = booleanPreferencesKey("turn_tcp_enabled")
+        /** Транспорт до TURN-relay VK: udp / tcp. Заменяет TURN_TCP_ENABLED. */
+        private val TURN_TRANSPORT = stringPreferencesKey("turn_transport")
+        /** Свои TURN-адреса вместо адресов VK: IP или IP:порт через запятую. */
+        private val TURN_HOSTS = stringPreferencesKey("turn_hosts")
         private val SNI = stringPreferencesKey("sni")
 
         private val DEPLOY_IP = stringPreferencesKey("deploy_ip")
@@ -76,6 +82,8 @@ class SettingsStore(context: Context) {
         // ═══ Пароли и Управление ═══
         private val CONNECTION_PASSWORD = stringPreferencesKey("connection_password")
         private val CONNECTION_PASSWORD_ENCRYPTED = stringPreferencesKey("connection_password_encrypted")
+        /** Ключ диагностики сервера (dk= из ссылки) для текущего профиля. */
+        private val DIAG_KEY_ENCRYPTED = stringPreferencesKey("diag_key_encrypted")
         private val DEPLOY_MAIN_PASSWORD = stringPreferencesKey("deploy_main_password")
         private val DEPLOY_MAIN_PASSWORD_ENCRYPTED = stringPreferencesKey("deploy_main_password_encrypted")
         private val DEPLOY_ADMIN_ID = stringPreferencesKey("deploy_admin_id")
@@ -164,6 +172,22 @@ class SettingsStore(context: Context) {
             return if (path.equals("legacy", ignoreCase = true)) "legacy" else "vkcalls"
         }
 
+        const val TURN_TRANSPORT_UDP = "udp"
+        const val TURN_TRANSPORT_TCP = "tcp"
+        /** "tls" из прошлой сборки становится TCP: VK не поддерживает TURN по TLS. */
+        fun normalizeTurnTransport(transport: String?): String {
+            return when {
+                transport.equals(TURN_TRANSPORT_TCP, ignoreCase = true) -> TURN_TRANSPORT_TCP
+                transport.equals("tls", ignoreCase = true) -> TURN_TRANSPORT_TCP
+                else -> TURN_TRANSPORT_UDP
+            }
+        }
+
+        /** Оставляет в списке своих TURN-адресов только символы адресов и разделители. */
+        fun sanitizeTurnHosts(input: String): String {
+            return input.filter { it.isLetterOrDigit() || it in ".:-[],; " }.take(512)
+        }
+
         fun normalizeObfsMode(mode: String?): String {
             return if (mode.equals("video", ignoreCase = true)) "video" else "audio"
         }
@@ -187,7 +211,7 @@ class SettingsStore(context: Context) {
         /** DNS для Go-резолвера (login.vk.ru, api.vk.me). */
         fun normalizeGoDnsPreset(preset: String?): String {
             return when (preset?.trim()?.lowercase()) {
-                "cloudflare", "google", "custom",
+                "cloudflare", "google", "custom", "operator",
                 "doh-yandex", "doh-cloudflare", "doh-google", "doh-custom" -> preset.trim().lowercase()
                 else -> "yandex" // включая устаревший "auto"
             }
@@ -252,6 +276,8 @@ class SettingsStore(context: Context) {
                         .filter { it.isNotEmpty() }
                     GoDnsDisplay("custom", "Свой DNS", servers)
                 }
+                // Адреса берутся у текущей сети в момент подключения (NetworkDns).
+                "operator" -> GoDnsDisplay("operator", "Операторский DNS", emptyList())
                 else -> GoDnsDisplay("yandex", "Яндекс DNS", listOf("77.88.8.8", "77.88.8.1"))
             }
         }
@@ -328,8 +354,15 @@ class SettingsStore(context: Context) {
     val noDtlsEnabled: Flow<Boolean> = dataStore.data.map { it[NO_DTLS_ENABLED] ?: false }
     val serverDirectPort: Flow<Int> = dataStore.data.map { it[SERVER_DIRECT_PORT] ?: 56002 }
     val serverRawPort: Flow<Int> = dataStore.data.map { it[SERVER_RAW_PORT] ?: 56003 }
-    /** TURN-relay по TCP вместо UDP — обход UDP-душения на некоторых сетях (напр. Ростелеком). По умолчанию включено. */
-    val turnTcpEnabled: Flow<Boolean> = dataStore.data.map { it[TURN_TCP_ENABLED] ?: true }
+    /**
+     * Транспорт до TURN-relay VK. Пока пользователь не выбрал явно — берётся из
+     * старой настройки TURN_TCP_ENABLED (по умолчанию TCP).
+     */
+    val turnTransport: Flow<String> = dataStore.data.map { prefs ->
+        prefs[TURN_TRANSPORT]?.let { normalizeTurnTransport(it) }
+            ?: if (prefs[TURN_TCP_ENABLED] ?: true) TURN_TRANSPORT_TCP else TURN_TRANSPORT_UDP
+    }
+    val turnHosts: Flow<String> = dataStore.data.map { it[TURN_HOSTS] ?: "" }
     val sni: Flow<String> = dataStore.data.map { it[SNI] ?: "" }
 
     val deployIp: Flow<String> = dataStore.data.map { it[DEPLOY_IP] ?: "" }
@@ -356,6 +389,9 @@ class SettingsStore(context: Context) {
     // ═══ Пароли и Управление ═══
     val connectionPassword: Flow<String> = dataStore.data.map {
         readSecret(it, CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD)
+    }
+    val diagKey: Flow<String> = dataStore.data.map {
+        readSecret(it, DIAG_KEY_ENCRYPTED, DIAG_KEY_ENCRYPTED)
     }
     val deployMainPassword: Flow<String> = dataStore.data.map {
         readSecret(it, DEPLOY_MAIN_PASSWORD_ENCRYPTED, DEPLOY_MAIN_PASSWORD)
@@ -586,8 +622,16 @@ class SettingsStore(context: Context) {
         dataStore.edit { prefs -> prefs[SERVER_RAW_PORT] = port.coerceIn(1, 65535) }
     }
 
-    suspend fun saveTurnTcpEnabled(enabled: Boolean) {
-        dataStore.edit { prefs -> prefs[TURN_TCP_ENABLED] = enabled }
+    suspend fun saveTurnTransport(transport: String) {
+        val normalized = normalizeTurnTransport(transport)
+        dataStore.edit { prefs ->
+            prefs[TURN_TRANSPORT] = normalized
+            prefs[TURN_TCP_ENABLED] = normalized != TURN_TRANSPORT_UDP
+        }
+    }
+
+    suspend fun saveTurnHosts(hosts: String) {
+        dataStore.edit { prefs -> prefs[TURN_HOSTS] = sanitizeTurnHosts(hosts).trim() }
     }
 
     suspend fun saveGlobalVkHashes(hashes: String) {
@@ -651,6 +695,12 @@ class SettingsStore(context: Context) {
     suspend fun saveConnectionPassword(password: String) {
         dataStore.edit { prefs ->
             prefs.putSecret(CONNECTION_PASSWORD_ENCRYPTED, CONNECTION_PASSWORD, password)
+        }
+    }
+
+    suspend fun saveDiagKey(key: String) {
+        dataStore.edit { prefs ->
+            prefs.putSecret(DIAG_KEY_ENCRYPTED, DIAG_KEY_ENCRYPTED, key.trim())
         }
     }
     
