@@ -26,11 +26,7 @@ const (
 	readBufSize        = 1600
 	socketBufSize      = 625 * 1024
 	keepaliveByte      = 0xFF // keepalive marker (DTLS-level или прямой obfs-кадр)
-	// keepaliveInterval — держит TURN permission/NAT-маппинг тёплым и
-	// служит пульсом для проверки живости потока (liveness.go): сервер
-	// отвечает на каждый keepalive. Было 10 с; 5 с — чтобы мёртвый поток
-	// снимался за ~15 с, а не за полминуты.
-	keepaliveInterval = 5 * time.Second
+	// keepaliveInterval и режим экрана — в liveness.go.
 	// keepaliveMinSize/keepaliveMaxSize: keepalive-пакет теперь не
 	// фиксированного размера (было 1 байт постоянно) — случайная длина
 	// 25-44 байта имитирует "тишину" OPUS в реальном звонке; постоянный
@@ -519,31 +515,26 @@ func RunSession(
 
 		didBytes := make([]byte, 16)
 		copy(didBytes, deviceID)
-		nextKeepalive := time.Now().Add(keepaliveInterval)
+		planner := newLivenessPlanner(liveness, time.Now())
 
 		for {
 			select {
 			case <-sessCtx.Done():
 				return
 			case now := <-t.C:
-				if liveness.tick(now) {
-					// Процесс стоял (сон/Doze): тишина за это время — не
-					// смерть потока. Сразу проверяем его keepalive'ом.
-					nextKeepalive = now
-				}
-				if silent, dead := liveness.silentFor(now); dead {
-					log.Printf("[ВОРКЕР #%d] Сервер не отвечает %d с — поток мёртв, переподключаем", sessionID, int(silent.Seconds()))
+				st := planner.step(now, lowPowerMode.Load())
+				if st.dead {
+					log.Printf("[ВОРКЕР #%d] Сервер не отвечает %d с — поток мёртв, переподключаем", sessionID, int(st.silent.Seconds()))
 					select {
-					case sessionErrCh <- fmt.Errorf("поток не отвечает %d с", int(silent.Seconds())):
+					case sessionErrCh <- fmt.Errorf("поток не отвечает %d с", int(st.silent.Seconds())):
 					default:
 					}
 					sessCancel()
 					return
 				}
-				if now.Before(nextKeepalive) {
+				if !st.sendKeepalive {
 					continue
 				}
-				nextKeepalive = now.Add(keepaliveInterval)
 				size := keepaliveMinSize + rand.Intn(keepaliveMaxSize)
 				pkt := getPktBuf(size)
 				pkt[0] = keepaliveByte

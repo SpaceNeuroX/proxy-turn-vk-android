@@ -114,6 +114,10 @@ object TunnelManager {
     @Volatile private var diagTriggerFile: java.io.File? = null
     /** Проверку попросили до запуска процесса — триггер создаётся вместе с ним. */
     @Volatile private var pendingManualDiag = false
+    /** Экран включён — Go реже шлёт keepalive, пока он выключен (go_client/liveness.go). */
+    @Volatile private var screenOn = true
+    /** Строки в stdin Go-процесса пишутся из разных потоков — не даём им перемешаться. */
+    private val goStdinLock = Any()
     /** Плановый рестарт транспорта (смена сети): log reader не должен сбрасывать running. */
     @Volatile
     var transportRestartInProgress: Boolean = false
@@ -632,6 +636,7 @@ object TunnelManager {
 
                 process = pb.start()
                 processStartedAtMs = System.currentTimeMillis()
+                if (!screenOn) writeGoCommand("SCREEN_OFF")
                 wrapAuthTimeoutCount = 0
                 lastActiveAtMs = 0L
                 lastStatsReceivedAtMs = System.currentTimeMillis()
@@ -1861,15 +1866,31 @@ object TunnelManager {
      * Записывает результат решения капчи в stdin Go-процесса.
      */
     private fun writeCaptchaResult(result: String) {
-        val proc = process
-        if (proc == null || !proc.isAlive) return
-        try {
-            val line = "CAPTCHA_RESULT|$result\n"
-            proc.outputStream.write(line.toByteArray(Charsets.UTF_8))
-            proc.outputStream.flush()
-        } catch (e: Exception) {
-            updateLog("captcha_write_err", "[КАПЧА] Ошибка записи: ${e.message}", 200, true)
+        if (!writeGoCommand("CAPTCHA_RESULT|$result")) {
+            updateLog("captcha_write_err", "[КАПЧА] Ошибка записи в процесс", 200, true)
         }
+    }
+
+    /** Одна строка-команда в stdin Go-процесса. false — процесса нет или запись не удалась. */
+    private fun writeGoCommand(command: String): Boolean {
+        val proc = process
+        if (proc == null || !proc.isAlive) return false
+        return synchronized(goStdinLock) {
+            runCatching {
+                proc.outputStream.write("$command\n".toByteArray(Charsets.UTF_8))
+                proc.outputStream.flush()
+            }.isSuccess
+        }
+    }
+
+    /**
+     * Экран выключился/включился. При выключенном экране Go шлёт keepalive
+     * реже, чтобы радио спало; при включении сразу проверяет все потоки.
+     */
+    fun setScreenOn(on: Boolean) {
+        if (screenOn == on) return
+        screenOn = on
+        writeGoCommand(if (on) "SCREEN_ON" else "SCREEN_OFF")
     }
 
     private suspend fun handleVkAuthRequired(hash: String) {

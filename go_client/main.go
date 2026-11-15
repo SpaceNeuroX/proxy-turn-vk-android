@@ -146,6 +146,11 @@ func main() {
 				atomic.StoreInt32(&pauseFlag, 1)
 			case line == "RESUME":
 				atomic.StoreInt32(&pauseFlag, 0)
+			case line == "SCREEN_OFF":
+				// Экран выключен: реже keepalive, чтобы радио спало (liveness.go).
+				lowPowerMode.Store(true)
+			case line == "SCREEN_ON":
+				lowPowerMode.Store(false)
 			case line == "STOP":
 				cancel()
 				return
