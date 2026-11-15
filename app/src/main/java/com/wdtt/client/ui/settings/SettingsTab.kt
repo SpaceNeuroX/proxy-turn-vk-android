@@ -3364,9 +3364,16 @@ private fun GoDnsSettingsSection(
     var checkResultText by remember { mutableStateOf<String?>(null) }
     var checkResultOk by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // DNS текущей сети: перечитываем при открытии списка — сеть могла смениться.
+    var networkDns by remember { mutableStateOf(com.wdtt.client.NetworkDns.current(context)) }
+    LaunchedEffect(expanded, goDnsPreset) {
+        networkDns = com.wdtt.client.NetworkDns.current(context)
+    }
 
     val udpPresets = remember {
         listOf(
+            "operator" to "Операторский DNS",
             "yandex" to "Яндекс DNS",
             "cloudflare" to "Cloudflare",
             "google" to "Google DNS",
@@ -3390,6 +3397,8 @@ private fun GoDnsSettingsSection(
             "doh-custom" -> SettingsStore.goDnsDisplay("doh-custom", goDnsDohCustomInput).servers
                 .joinToString(" · ")
                 .ifBlank { "укажите URL ниже" }
+            "operator" -> networkDns.joinToString(" · ")
+                .ifBlank { "DNS вашей сети: оператора или Wi-Fi" }
             else -> SettingsStore.goDnsDisplay(preset).servers.joinToString(" · ")
         }
     }
@@ -3412,7 +3421,8 @@ private fun GoDnsSettingsSection(
             fontWeight = FontWeight.SemiBold
         )
         Text(
-            "Резолв login.vk.ru и api.vk.me при подключении.",
+            "Резолв login.vk.ru и api.vk.me при подключении. Если выбранный DNS не отвечает, " +
+                "используется DNS вашей сети (оператора или Wi-Fi).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -3539,10 +3549,12 @@ private fun GoDnsSettingsSection(
                     isCheckingDns = true
                     checkResultText = null
                     try {
+                        networkDns = com.wdtt.client.NetworkDns.current(context)
                         val result = com.wdtt.client.GoDnsProbe.checkPreset(
                             preset = goDnsPreset,
                             customRaw = goDnsCustomInput,
                             dohCustomRaw = goDnsDohCustomInput,
+                            networkDns = networkDns,
                         )
                         checkResultOk = result.reachable
                         checkResultText = if (result.reachable) {

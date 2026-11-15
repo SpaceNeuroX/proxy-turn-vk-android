@@ -180,6 +180,7 @@ func main() {
 	vkAnonPath := flag.String("vk-anon-path", "vkcalls", "анонимный путь VK TURN (vkcalls/legacy)")
 	vkCredsFile := flag.String("vk-creds-file", "", "файл с TURN кредами от аккаунта VK")
 	goDNS := flag.String("go-dns", "yandex", "DNS для VK (yandex/cloudflare/google, doh-yandex/doh-cloudflare/doh-google, custom:IP или doh:URL)")
+	dnsFallback := flag.String("dns-fallback", "", "DNS текущей сети (оператора/роутера) через запятую — запасной для -go-dns, основной для -go-dns operator")
 	obfsMode := flag.String("obfs", "audio", "режим обфускации (audio/video)")
 	checkHashes := flag.Bool("check-hashes", false, "проверить VK-хеши и выйти")
 	connMode := flag.String("mode", "vpn", "режим клиента (vpn|socks|rawtun)")
@@ -210,7 +211,7 @@ func main() {
 			log.Fatal("[SOCKS] Логин и пароль должны быть не длиннее 255 байт")
 		}
 	}
-	setupGlobalResolver(*goDNS)
+	setupGlobalResolver(*goDNS, parseDNSFallback(*dnsFallback))
 	activeCaptchaMode := setCaptchaMode(*captchaMode)
 	activeVkAuthMode := setVkAuthMode(*vkAuthMode)
 	activeVkAnonPath := setVkAnonPath(*vkAnonPath)

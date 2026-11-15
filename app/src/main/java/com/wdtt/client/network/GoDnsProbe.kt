@@ -57,7 +57,42 @@ object GoDnsProbe {
             }
     }
 
-    suspend fun check(goDnsArg: String, timeoutMs: Int = 2000): Result = withContext(Dispatchers.IO) {
+    /**
+     * Проверка DNS для аргумента -go-dns. Для «operator» адреса берутся из
+     * [networkDns] — DNS текущей сети (см. NetworkDns).
+     */
+    suspend fun check(goDnsArg: String, timeoutMs: Int = 2000, networkDns: List<String> = emptyList()): Result {
+        if (goDnsArg.trim().equals("operator", ignoreCase = true)) {
+            return checkServers("Операторский DNS", networkDns, timeoutMs)
+        }
+        return checkArg(goDnsArg, timeoutMs)
+    }
+
+    /** UDP-проверка заданных адресов (DNS сети, запасной вариант). */
+    suspend fun checkServers(title: String, servers: List<String>, timeoutMs: Int = 2000): Result =
+        withContext(Dispatchers.IO) {
+            if (servers.isEmpty()) {
+                return@withContext Result(
+                    reachable = false,
+                    title = title,
+                    okHosts = emptyList(),
+                    failedHosts = emptyList(),
+                    detail = "сеть не сообщила адреса DNS",
+                )
+            }
+            val checks = coroutineScope {
+                servers.map { target -> async { target to probeDnsServer(target, timeoutMs) } }.awaitAll()
+            }
+            Result(
+                reachable = checks.any { it.second },
+                title = title,
+                okHosts = checks.filter { it.second }.map { it.first },
+                failedHosts = checks.filter { !it.second }.map { it.first },
+                detail = "UDP DNS $PROBE_HOST",
+            )
+        }
+
+    private suspend fun checkArg(goDnsArg: String, timeoutMs: Int): Result = withContext(Dispatchers.IO) {
         val parsed = SettingsStore.goDnsDisplayFromArg(goDnsArg)
         val targets = if (parsed.servers.isNotEmpty()) {
             parsed.servers
@@ -108,6 +143,7 @@ object GoDnsProbe {
         customRaw: String = "",
         dohCustomRaw: String = "",
         timeoutMs: Int = 2000,
+        networkDns: List<String> = emptyList(),
     ): Result {
         val arg = when (val normalized = SettingsStore.normalizeGoDnsPreset(preset)) {
             "custom" -> {
@@ -120,7 +156,7 @@ object GoDnsProbe {
             }
             else -> normalized
         }
-        return check(arg, timeoutMs)
+        return check(arg, timeoutMs, networkDns)
     }
 
     private fun resolveDohEndpoint(target: String): String {

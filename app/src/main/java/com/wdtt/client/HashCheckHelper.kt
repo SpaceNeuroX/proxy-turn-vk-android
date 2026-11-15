@@ -51,6 +51,10 @@ object HashCheckHelper {
                 android.provider.Settings.Secure.ANDROID_ID
             ) ?: "unknown",
         )
+        // DNS текущей сети — запасной (и основной для «Операторского»).
+        NetworkDns.current(context).takeIf { it.isNotEmpty() }?.let {
+            cmd += listOf("-dns-fallback", it.joinToString(","))
+        }
 
         val process = ProcessBuilder(cmd)
             .directory(context.filesDir)

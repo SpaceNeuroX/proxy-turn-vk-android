@@ -473,6 +473,13 @@ object TunnelManager {
 
                 cmd.add("-go-dns")
                 cmd.add(params.goDnsArg)
+                // DNS текущей сети (оператор или роутер Wi-Fi): запасной, если
+                // выбранный DNS не отвечает, и основной для «Операторского».
+                val networkDns = NetworkDns.current(appContext)
+                if (networkDns.isNotEmpty()) {
+                    cmd.add("-dns-fallback")
+                    cmd.add(networkDns.joinToString(","))
+                }
 
                 cmd.add("-obfs")
                 cmd.add(SettingsStore.normalizeObfsMode(params.obfsMode))
@@ -563,7 +570,7 @@ object TunnelManager {
                 }
 
                 setConnectionPipelineCurrent(ConnectionStep.DNS)
-                var dnsProbe = GoDnsProbe.check(params.goDnsArg)
+                var dnsProbe = GoDnsProbe.check(params.goDnsArg, networkDns = networkDns)
                 if (isSwitching && !dnsProbe.reachable) {
                     for (attempt in 2..4) {
                         updateLog(
@@ -573,8 +580,34 @@ object TunnelManager {
                             false,
                         )
                         delay(2_000)
-                        dnsProbe = GoDnsProbe.check(params.goDnsArg)
+                        dnsProbe = GoDnsProbe.check(params.goDnsArg, networkDns = networkDns)
                         if (dnsProbe.reachable) break
+                    }
+                }
+                if (!dnsProbe.reachable) {
+                    // Запасной вариант: для обычного выбора — DNS сети, для
+                    // «Операторского» — Яндекс. Go-клиент переключается так же.
+                    val isOperator = params.goDnsArg.trim().equals("operator", ignoreCase = true)
+                    val fallback = when {
+                        isOperator -> GoDnsProbe.check("yandex")
+                        networkDns.isNotEmpty() -> GoDnsProbe.checkServers("DNS сети", networkDns)
+                        else -> null
+                    }
+                    if (fallback?.reachable == true) {
+                        updateLog(
+                            "go_dns_fallback",
+                            "[СЕТЬ] ${dnsProbe.title} не отвечает — используем ${fallback.title} (${fallback.okHosts.joinToString(", ")})",
+                            50,
+                            false
+                        )
+                        dnsProbe = fallback
+                    } else if (fallback != null) {
+                        updateLog(
+                            "go_dns_fallback_fail",
+                            "[СЕТЬ] Запасной ${fallback.title} тоже недоступен: ${fallback.statusText}",
+                            50,
+                            true
+                        )
                     }
                 }
                 if (!dnsProbe.reachable) {
@@ -587,7 +620,7 @@ object TunnelManager {
                     failConnectionPipeline(ConnectionStep.DNS)
                     updateLog(
                         "go_dns_tip",
-                        "[СЕТЬ] Смените DNS в ⚙️ → Сеть (Яндекс / Cloudflare / Google / DoH / Свой)",
+                        "[СЕТЬ] Смените DNS в ⚙️ → Сеть (Операторский / Яндекс / Cloudflare / Google / DoH / Свой)",
                         50,
                         true
                     )

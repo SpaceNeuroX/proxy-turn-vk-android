@@ -215,7 +215,7 @@ class SettingsStore(context: Context) {
         /** DNS для Go-резолвера (login.vk.ru, api.vk.me). */
         fun normalizeGoDnsPreset(preset: String?): String {
             return when (preset?.trim()?.lowercase()) {
-                "cloudflare", "google", "custom",
+                "cloudflare", "google", "custom", "operator",
                 "doh-yandex", "doh-cloudflare", "doh-google", "doh-custom" -> preset.trim().lowercase()
                 else -> "yandex" // включая устаревший "auto"
             }
@@ -280,6 +280,8 @@ class SettingsStore(context: Context) {
                         .filter { it.isNotEmpty() }
                     GoDnsDisplay("custom", "Свой DNS", servers)
                 }
+                // Адреса берутся у текущей сети в момент подключения (NetworkDns).
+                "operator" -> GoDnsDisplay("operator", "Операторский DNS", emptyList())
                 else -> GoDnsDisplay("yandex", "Яндекс DNS", listOf("77.88.8.8", "77.88.8.1"))
             }
         }

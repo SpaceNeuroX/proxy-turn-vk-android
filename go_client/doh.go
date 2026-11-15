@@ -1,17 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
-	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
 	neturl "net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -204,134 +199,3 @@ func frameDNSForTCP(payload []byte) []byte {
 	copy(out[2:], payload)
 	return out
 }
-
-type dohConn struct {
-	mu        sync.Mutex
-	endpoints []string
-	client    *http.Client
-	response  []byte
-	readPos   int
-	closed    bool
-}
-
-func newDohConn(endpoints []string, client *http.Client) *dohConn {
-	return &dohConn{
-		endpoints: append([]string(nil), endpoints...),
-		client:    client,
-	}
-}
-
-func (c *dohConn) Read(b []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return 0, net.ErrClosed
-	}
-	if len(c.response) == 0 {
-		return 0, fmt.Errorf("doh: read before write")
-	}
-	if c.readPos >= len(c.response) {
-		return 0, io.EOF
-	}
-	n := copy(b, c.response[c.readPos:])
-	c.readPos += n
-	return n, nil
-}
-
-func (c *dohConn) Write(b []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return 0, net.ErrClosed
-	}
-
-	// Go treats any custom net.Conn as TCP DNS (RFC 7766 length prefix).
-	query := stripDNSWireFrame(b)
-	var lastErr error
-	for _, endpoint := range c.endpoints {
-		body, err := c.exchange(endpoint, query)
-		if err == nil {
-			c.response = frameDNSForTCP(body)
-			c.readPos = 0
-			return len(b), nil
-		}
-		lastErr = err
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("no DoH endpoints available")
-	}
-	return 0, lastErr
-}
-
-func (c *dohConn) exchange(endpoint string, query []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(query))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/dns-message")
-	req.Header.Set("Content-Type", "application/dns-message")
-	if host := dohHostHeader(endpoint); host != "" {
-		req.Host = host
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("doh: HTTP %d from %s", resp.StatusCode, endpoint)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 65535))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) < 12 {
-		return nil, fmt.Errorf("doh: short response from %s", endpoint)
-	}
-	return body, nil
-}
-
-func (c *dohConn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.closed = true
-	c.response = nil
-	c.readPos = 0
-	return nil
-}
-
-func (c *dohConn) LocalAddr() net.Addr              { return &net.TCPAddr{IP: net.IPv4zero, Port: 0} }
-func (c *dohConn) RemoteAddr() net.Addr             { return &net.TCPAddr{IP: net.IPv4zero, Port: 443} }
-func (c *dohConn) SetDeadline(time.Time) error      { return nil }
-func (c *dohConn) SetReadDeadline(time.Time) error  { return nil }
-func (c *dohConn) SetWriteDeadline(time.Time) error { return nil }
-
-func setupDoHResolver(arg string, endpoints []string) {
-	client := newDoHHTTPClient()
-
-	log.Printf(
-		"[КЛИЕНТ] DNS для VK: %s (%s) — DoH",
-		goDNSLabel(arg),
-		formatDoHEndpoints(endpoints),
-	)
-
-	net.DefaultResolver = &net.Resolver{
-		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			_ = ctx
-			_ = network
-			_ = address
-			if len(endpoints) == 0 {
-				return nil, fmt.Errorf("no DoH endpoints configured for %q", arg)
-			}
-			return newDohConn(endpoints, client), nil
-		},
-	}
-}
-	
