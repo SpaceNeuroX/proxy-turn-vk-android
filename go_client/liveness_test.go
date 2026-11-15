@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -16,8 +17,12 @@ type sim struct {
 }
 
 func newSim(t *testing.T) *sim {
+	return newSimShared(t, new(atomic.Bool))
+}
+
+func newSimShared(t *testing.T, shared *atomic.Bool) *sim {
 	t0 := time.Unix(1_000_000, 0)
-	l := newSessionLiveness(t0)
+	l := newSessionLivenessShared(t0, shared)
 	return &sim{t: t, now: t0, t0: t0, l: l, p: newLivenessPlanner(l, t0)}
 }
 
@@ -159,9 +164,23 @@ func TestLivenessDataKeepsAlive(t *testing.T) {
 	}
 }
 
+func TestLivenessFreshSessionCoveredByEarlierPong(t *testing.T) {
+	// Сервер уже отвечал старому потоку. Новый поток подключился и не успел
+	// получить ни одного ответа — сервер упал. Его всё равно надо снять.
+	shared := new(atomic.Bool)
+	old := newSimShared(t, shared)
+	old.run(10*time.Second, false, true)
+
+	fresh := newSimShared(t, shared)
+	dead := fresh.run(time.Minute, false, false)
+	if dead == 0 || dead > 16*time.Second {
+		t.Fatalf("fresh flow on a server known to answer: dead at %v, want ≤ 16 s", dead)
+	}
+}
+
 func TestLivenessGraceNeverShortensWindow(t *testing.T) {
 	t0 := time.Unix(1000, 0)
-	l := newSessionLiveness(t0)
+	l := newSessionLivenessShared(t0, new(atomic.Bool))
 	l.notePong(t0)
 	l.grace(t0.Add(time.Second), livenessTimeout)
 	if got := l.lastRx.Load(); got != t0.UnixMilli() {

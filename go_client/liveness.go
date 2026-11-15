@@ -48,13 +48,25 @@ const (
 // lowPowerMode — экран выключен (команды SCREEN_OFF/SCREEN_ON из stdin).
 var lowPowerMode atomic.Bool
 
+// serverAnswersKeepalive — сервер хоть раз ответил на keepalive (любому
+// потоку). Признак общий на весь клиент: один процесс — один сервер. Если
+// держать его в каждом потоке отдельно, поток, переподключившийся прямо
+// перед падением сервера, не успевал получить первый ответ, проверка для
+// него не включалась, и мёртвые потоки висели как живые.
+var serverAnswersKeepalive atomic.Bool
+
 type sessionLiveness struct {
 	lastRx   atomic.Int64 // unix ms последнего пакета от сервера (данные или ответ)
-	pongSeen atomic.Bool  // сервер умеет отвечать на keepalive
+	pongSeen *atomic.Bool // сервер умеет отвечать на keepalive (общий признак)
 }
 
 func newSessionLiveness(now time.Time) *sessionLiveness {
-	l := &sessionLiveness{}
+	return newSessionLivenessShared(now, &serverAnswersKeepalive)
+}
+
+// newSessionLivenessShared — с явным общим признаком (для тестов).
+func newSessionLivenessShared(now time.Time, pongSeen *atomic.Bool) *sessionLiveness {
+	l := &sessionLiveness{pongSeen: pongSeen}
 	l.lastRx.Store(now.UnixMilli())
 	return l
 }

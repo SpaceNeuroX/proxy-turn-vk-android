@@ -15,6 +15,25 @@ const workersPerGroup = 9
 
 const allocateGateInterval = 100 * time.Millisecond
 
+// quotaRetryDelay — пауза после «Allocation Quota Reached» (486). Раньше
+// было 30-60 с с первого же раза: при массовом переподключении (сервер
+// вернулся, сменилась сеть) один поток, наткнувшийся на квоту, выпадал на
+// полминуты, хотя слоты освобождаются за секунды. Теперь 2 → 4 → 8 → 16 →
+// 30 с плюс разброс; со второго раза берутся свежие креды.
+func quotaRetryDelay(streak int) time.Duration {
+	if streak < 1 {
+		streak = 1
+	}
+	d := 2 * time.Second
+	for i := 1; i < streak && d < 30*time.Second; i++ {
+		d *= 2
+	}
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d + time.Duration(rand.Intn(1000))*time.Millisecond
+}
+
 // workerRetryDelay — пауза перед повтором упавшего потока: 0,5 с с
 // удвоением до 8 с плюс разброс, чтобы потоки не ломились разом. Раньше
 // было 5-15 с на любую ошибку, и поток, споткнувшийся на старте, выпадал
@@ -169,6 +188,7 @@ func WorkerGroup(
 
 			shouldGetConfig := getConfig
 			attempt := 0
+			quotaStreak := 0 // сколько раз подряд VK ответил «квота исчерпана»
 
 			for {
 				if ctx.Err() != nil {
@@ -241,7 +261,14 @@ func WorkerGroup(
 
 					attempt++
 					if isTurnQuota {
-						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (один аккаунт VK = мало слотов), ждём: %s", wid, errStr)
+						quotaStreak++
+						log.Printf("[ВОРКЕР #%d] [TURN] Квота relay исчерпана (%d-й раз подряд), повтор через %v: %s", wid, quotaStreak, quotaRetryDelay(quotaStreak).Truncate(time.Second), errStr)
+						// Повторный отказ: на этих кредах слотов нет — берём
+						// свежие (у них своя квота). В режиме аккаунта VK креды
+						// выдаёт приложение через авторизацию — его не дёргаем.
+						if quotaStreak >= 2 && getVkAuthMode() != "account" {
+							refreshCreds("TURN quota")
+						}
 					} else if turnAllocAttrMissing {
 						log.Printf("[ВОРКЕР #%d] [TURN] Allocate вернул неполный ответ, обновляем TURN-креды и повторяем (попытка %d): %s", wid, attempt, errStr)
 						refreshCreds("TURN Allocate attribute-not-found")
@@ -270,9 +297,12 @@ func WorkerGroup(
 				if time.Since(sessStarted) > 60*time.Second {
 					attempt = 1
 				}
+				if !quotaRetry {
+					quotaStreak = 0
+				}
 				retryDelay := workerRetryDelay(attempt)
 				if quotaRetry {
-					retryDelay = time.Duration(30+rand.Intn(31)) * time.Second
+					retryDelay = quotaRetryDelay(quotaStreak)
 				} else if fastRetry {
 					retryDelay = time.Duration(1+rand.Intn(3)) * time.Second
 				}
