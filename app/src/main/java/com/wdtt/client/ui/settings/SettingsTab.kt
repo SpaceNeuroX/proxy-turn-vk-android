@@ -2089,10 +2089,10 @@ fun SettingsTabContent(
             // вместо VPN. Выбирается в «Режиме подключения» ниже; если уже
             // выбран — показываем третьим сегментом, чтобы было видно, что активно.
             val quickModes = buildList {
-                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_VPN, "WG", connectionModeIcons.getValue("wg")))
-                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_RAWTUN, "Raw", connectionModeIcons.getValue("raw")))
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_VPN, "WG"))
+                add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_RAWTUN, "Raw"))
                 if (connectionMode == SettingsStore.CONNECTION_MODE_SOCKS) {
-                    add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_SOCKS, "SOCKS5", connectionModeIcons.getValue("socks")))
+                    add(ConnectionModeOption(SettingsStore.CONNECTION_MODE_SOCKS, "SOCKS5"))
                 }
             }
             ConnectionModeSwitch(
