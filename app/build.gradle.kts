@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 import org.gradle.api.tasks.Exec
 
@@ -18,14 +19,13 @@ android {
     namespace = "com.wdtt.client"   
     compileSdk = 35
     
-    // Тестовый билд с другим applicationId: -PappIdSuffix=dev -> net.qwdtt.client.dev
-    // (ставится рядом с основным приложением без конфликта).
-    val appIdSuffix = providers.gradleProperty("appIdSuffix").orNull?.trim()?.takeIf { it.isNotEmpty() }
-    val appName = if (appIdSuffix != null) "qWDTT Test" else "qWDTT"
+    // Debug-сборка по умолчанию ставится отдельным приложением (net.qwdtt.client.dev),
+    // чтобы не конфликтовать с основным. Переопределяется: -PappIdSuffix=other
+    val debugAppIdSuffix = providers.gradleProperty("appIdSuffix").orNull?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "dev"
 
     defaultConfig {
-        applicationId = if (appIdSuffix != null) "net.qwdtt.client.$appIdSuffix" else "net.qwdtt.client"
-        resValue("string", "app_name", appName)
+        applicationId = "net.qwdtt.client"
         minSdk = 28
         targetSdk = 35
         versionCode = 43
@@ -80,7 +80,14 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            // Отдельный applicationId и имя, чтобы ставиться рядом с основным приложением.
+            applicationIdSuffix = ".$debugAppIdSuffix"
+            resValue("string", "app_name", "qWDTT Test")
+            versionNameSuffix = "-$debugAppIdSuffix"
+        }
         getByName("release") {
+            resValue("string", "app_name", "qWDTT")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -138,11 +145,23 @@ android {
     }
 }
 
+// bash для нативной сборки (Windows: WSL-стаб C:\Windows\System32\bash.exe не годится,
+// нужен Git Bash — ищем полный путь, иначе ProcessBuilder находит WSL-стаб первым).
+val bashExecutable: String by lazy {
+    val candidates = listOf(
+        System.getenv("ProgramFiles")?.let { "$it\\Git\\bin\\bash.exe" },
+        "C:\\Program Files\\Git\\bin\\bash.exe",
+        "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+        System.getenv("GIT_BASH")?.takeIf { it.isNotEmpty() },
+    ).filterNotNull().filter { File(it).exists() }
+    candidates.firstOrNull() ?: "bash"
+}
+
 tasks.register<Exec>("buildNativeLibs") {
     group = "build"
     description = "Build Go client binaries for Android ABIs and copy them into app/src/main/jniLibs"
     workingDir = rootDir
-    commandLine("bash", rootDir.resolve("scripts/build-native-libs.sh").absolutePath)
+    commandLine(bashExecutable, rootDir.resolve("scripts/build-native-libs.sh").absolutePath)
     environment(
         "TARGET_ABIS",
         providers.gradleProperty("targetAbis").orNull?.replace(',', ' ')
