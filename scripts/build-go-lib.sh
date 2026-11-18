@@ -42,7 +42,7 @@ case "$ABI" in
     ;;
 esac
 
-if [[ -n "$NDK_DIR" && ! -d "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64" ]]; then
+if [[ -n "$NDK_DIR" && ! -d "$NDK_DIR/toolchains/llvm/prebuilt" ]]; then
   NDK_DIR=""
 fi
 
@@ -62,7 +62,14 @@ if [[ -z "$NDK_DIR" ]]; then
   exit 1
 fi
 
+# Host tag: NDK устанавливается по платформе хоста (linux-x86_64 / windows-x86_64 / darwin-x86_64).
 HOST_TAG="linux-x86_64"
+for tag in linux-x86_64 windows-x86_64 darwin-x86_64; do
+  if [[ -d "$NDK_DIR/toolchains/llvm/prebuilt/$tag" ]]; then
+    HOST_TAG="$tag"
+    break
+  fi
+done
 CC="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin/${CLANG_PREFIX}${API_LEVEL}-clang"
 
 if [[ ! -x "$CC" ]]; then

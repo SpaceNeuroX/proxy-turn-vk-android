@@ -18,8 +18,14 @@ android {
     namespace = "com.wdtt.client"   
     compileSdk = 35
     
+    // Тестовый билд с другим applicationId: -PappIdSuffix=dev -> net.qwdtt.client.dev
+    // (ставится рядом с основным приложением без конфликта).
+    val appIdSuffix = providers.gradleProperty("appIdSuffix").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    val appName = if (appIdSuffix != null) "qWDTT Test" else "qWDTT"
+
     defaultConfig {
-        applicationId = "net.qwdtt.client"
+        applicationId = if (appIdSuffix != null) "net.qwdtt.client.$appIdSuffix" else "net.qwdtt.client"
+        resValue("string", "app_name", appName)
         minSdk = 28
         targetSdk = 35
         versionCode = 43
@@ -112,6 +118,7 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        resValues = true
     }
 
     lint {
