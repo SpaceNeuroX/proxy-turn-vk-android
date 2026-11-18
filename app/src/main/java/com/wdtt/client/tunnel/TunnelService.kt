@@ -53,6 +53,7 @@ class TunnelService : Service() {
     private var recoveringFromNetworkLoss = false
     private var lastVpnReconnectAttemptMs = 0L
     private var wasOnWifi = false
+    private var recoveryWatchdogJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -62,6 +63,7 @@ class TunnelService : Service() {
         acquireWakeLock()
         setupNetworkCallback()
         setupScreenStateReceiver()
+        startRecoveryWatchdog()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -547,6 +549,41 @@ class TunnelService : Service() {
         TunnelManager.reconnectAll(reason, force = true)
     }
 
+    /**
+     * Сторож быстрого переподключения: страховка от «потерянных» сетевых событий.
+     * Если туннель должен работать (жив или на паузе из-за сети), но подключения
+     * нет и трафика давно не было — принудительно перезапускаем туннель.
+     * Работает только при включённой настройке быстрого переподключения
+     * и только при наличии сети с подтверждением (VALIDATED).
+     */
+    private fun startRecoveryWatchdog() {
+        recoveryWatchdogJob?.cancel()
+        recoveryWatchdogJob = TunnelManager.scope.launch {
+            while (isActive) {
+                delay(10_000)
+                try {
+                    if (!SettingsStore(applicationContext).fastNetworkReconnect.first()) continue
+                    // Туннель должен работать: жив либо на паузе из-за пропавшей сети.
+                    // Полностью остановленный (пользователем или «Отключать на Wi-Fi») не трогаем.
+                    if (!TunnelManager.running.value && !isTunnelPaused) continue
+                    if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) continue
+                    // Нет сети с подтверждением — ждём её появления, не молотим.
+                    if (!hasValidatedUnderlyingNetwork()) continue
+                    // Туннель жив и недавний трафик был — всё в порядке.
+                    if (TunnelManager.running.value && TunnelManager.hasRecentTransportActivity(30_000L)) continue
+                    isTunnelPaused = false
+                    recoveringFromNetworkLoss = false
+                    TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель не переподключился сам, принудительный рестарт.")
+                    performNetworkRecovery("сторож смены сети")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Сторож не должен умирать на разовых ошибках.
+                }
+            }
+        }
+    }
+
     private fun hasValidatedUnderlyingNetwork(): Boolean {
         val cm = connectivityManager ?: return false
         return activeNetworks.any { network ->
@@ -821,6 +858,7 @@ class TunnelService : Service() {
         super.onDestroy()
         networkRecoveryJob?.cancel()
         wakeRecoveryJob?.cancel()
+        recoveryWatchdogJob?.cancel()
         screenStateReceiver?.let { unregisterReceiver(it) }
         networkCallback?.let {
             connectivityManager?.unregisterNetworkCallback(it)
