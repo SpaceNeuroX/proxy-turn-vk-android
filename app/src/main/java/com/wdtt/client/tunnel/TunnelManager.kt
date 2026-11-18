@@ -140,6 +140,8 @@ object TunnelManager {
     private var cooldownJob: Job? = null
     private var startJob: Job? = null
     private var stopJob: Job? = null
+    /** Асинхронное опускание VPN при паузе из-за пропажи сети. */
+    private var pauseJob: Job? = null
     private var pipelineHideJob: Job? = null
     private var pipelineStepTimeoutJob: Job? = null
     @Volatile
@@ -1538,6 +1540,10 @@ object TunnelManager {
                 preserveVpnDuringReconnect = preserveVpn
                 updateLog("reconnect", "🔄 Переподключение ($reason)...", 50, false)
                 try {
+                    // Дожидаемся асинхронного опускания VPN из паузы, иначе её teardown
+                    // может выполниться уже после подъёма нового интерфейса.
+                    pauseJob?.join()
+                    pauseJob = null
                     val previousWireGuardConfig = config.value?.trim()
                     keepWireGuardOnNextConfig = false
                     preservedWireGuardConfig = null
@@ -1600,7 +1606,8 @@ object TunnelManager {
         activeWorkers.value = 0
         val params = currentParams
         val ctx = lastContext?.get()
-        scope.launch(Dispatchers.IO) {
+        pauseJob?.cancel()
+        pauseJob = scope.launch(Dispatchers.IO) {
             runCatching { wgHelper?.stopTunnel() }
             if (params?.isRawTunMode == true && ctx != null) {
                 runCatching { RawTunEngine.stop(ctx) }
