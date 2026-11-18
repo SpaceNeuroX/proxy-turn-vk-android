@@ -496,6 +496,19 @@ class TunnelService : Service() {
         networkRecoveryJob?.cancel()
         networkRecoveryJob = TunnelManager.scope.launch {
             if (!TunnelManager.running.value || isTunnelPaused) return@launch
+            if (SettingsStore(applicationContext).fastNetworkReconnect.first()) {
+                TunnelManager.addNetworkLog("[СЕТЬ] Сеть появилась. Ждём подтверждения (до 3 с) и переподключаемся (быстрый режим).")
+                val validationDeadline = System.currentTimeMillis() + 3_000L
+                while (!hasValidatedUnderlyingNetwork() && System.currentTimeMillis() < validationDeadline) {
+                    if (!TunnelManager.running.value || isTunnelPaused) return@launch
+                    delay(200)
+                }
+                if (!TunnelManager.running.value || isTunnelPaused) return@launch
+                recoveringFromNetworkLoss = false
+                wasOnWifi = isUnderlyingWifiActive()
+                performNetworkRecovery("сеть появилась (быстрый режим)")
+                return@launch
+            }
             TunnelManager.addNetworkLog("[СЕТЬ] Сеть появилась. Ждём подтверждения и стабилизации.")
             delay(5_000)
             val validationDeadline = System.currentTimeMillis() + 25_000L
@@ -514,6 +527,10 @@ class TunnelService : Service() {
         networkRecoveryJob?.cancel()
         networkRecoveryJob = TunnelManager.scope.launch {
             if (!TunnelManager.running.value || isTunnelPaused) return@launch
+            if (SettingsStore(applicationContext).fastNetworkReconnect.first()) {
+                performNetworkRecovery("смена сети (быстрый режим)")
+                return@launch
+            }
             TunnelManager.addNetworkLog("[СЕТЬ] Сеть изменилась. Ждём стабилизации и переподключаемся.")
             delay(4_000)
             if (!TunnelManager.running.value || isTunnelPaused ||
