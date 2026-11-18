@@ -133,6 +133,8 @@ class SettingsStore(context: Context) {
         // ═══ Поведение ═══
         private val AUTO_SWITCH_TO_LOGS = booleanPreferencesKey("auto_switch_to_logs")
         private val STOP_ON_WIFI = booleanPreferencesKey("stop_on_wifi")
+        /** Быстрое переподключение туннеля при смене сети (Wi-Fi ↔ мобильная). */
+        private val FAST_NETWORK_RECONNECT = booleanPreferencesKey("fast_network_reconnect")
         /** Автоперерезолв доменов обхода и reload WG при смене IP. */
         private val BYPASS_AUTO_REFRESH = booleanPreferencesKey("bypass_auto_refresh")
         private val CONNECTION_PIPELINE_ENABLED = booleanPreferencesKey("connection_pipeline_enabled")
@@ -453,6 +455,8 @@ class SettingsStore(context: Context) {
     // ═══ Поведение ═══
     val autoSwitchToLogs: Flow<Boolean> = dataStore.data.map { it[AUTO_SWITCH_TO_LOGS] ?: true }
     val stopOnWifi: Flow<Boolean> = dataStore.data.map { it[STOP_ON_WIFI] ?: false }
+    /** Быстрое переподключение при смене сети: без ожидания стабилизации, сразу стоп-старт. */
+    val fastNetworkReconnect: Flow<Boolean> = dataStore.data.map { it[FAST_NETWORK_RECONNECT] ?: false }
     /** Периодический перерезолв доменов обхода. По умолчанию включён. */
     val bypassAutoRefresh: Flow<Boolean> = dataStore.data.map { it[BYPASS_AUTO_REFRESH] ?: true }
     /** Схема этапов подключения на вкладке «Логи». По умолчанию включена. */
@@ -475,6 +479,10 @@ class SettingsStore(context: Context) {
 
     suspend fun saveStopOnWifi(enabled: Boolean) {
         dataStore.edit { prefs -> prefs[STOP_ON_WIFI] = enabled }
+    }
+
+    suspend fun saveFastNetworkReconnect(enabled: Boolean) {
+        dataStore.edit { prefs -> prefs[FAST_NETWORK_RECONNECT] = enabled }
     }
 
     suspend fun saveBypassAutoRefresh(enabled: Boolean) {
