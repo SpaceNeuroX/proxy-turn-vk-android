@@ -567,18 +567,25 @@ class TunnelService : Service() {
                     // Полностью остановленный (пользователем или «Отключать на Wi-Fi») не трогаем.
                     if (!TunnelManager.running.value && !isTunnelPaused) continue
                     if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) continue
+                    // Капча решается — воркеры молчат легально, рестарт убьёт WebView.
+                    if (ManlCaptchaWebViewManager.isCaptchaPending) continue
                     // Нет сети с подтверждением — ждём её появления, не молотим.
                     if (!hasValidatedUnderlyingNetwork()) continue
                     // Туннель жив и недавний трафик был — всё в порядке.
                     if (TunnelManager.running.value && TunnelManager.hasRecentTransportActivity(30_000L)) continue
                     isTunnelPaused = false
                     recoveringFromNetworkLoss = false
+                    lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
+                    updateNotification("Переподключение...")
                     TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель не переподключился сам, принудительный рестарт.")
-                    performNetworkRecovery("сторож смены сети")
+                    // Без force: guard MIN_RECONNECT_INTERVAL_MS ограничивает частоту,
+                    // иначе при постоянной ошибке подключения рестарт каждые 10 с.
+                    TunnelManager.reconnectAll("сторож смены сети")
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     // Сторож не должен умирать на разовых ошибках.
+                    Log.w("TunnelService", "watchdog tick failed", e)
                 }
             }
         }
