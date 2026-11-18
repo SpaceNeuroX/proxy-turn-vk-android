@@ -220,6 +220,9 @@ object TunnelManager {
     }
 
     fun addNetworkLog(message: String) {
+        // Дублируем в logcat: во внутреннем журнале строки видны только в UI,
+        // а при разборе проблем со сетью нужен adb logcat.
+        android.util.Log.i("WDTT_NET", message)
         updateLog("network_event", message, 2, false)
     }
 
@@ -1525,6 +1528,7 @@ object TunnelManager {
     fun reconnectAll(reason: String, force: Boolean = false, preserveVpn: Boolean = false) {
         val params = currentParams ?: return
         val context = lastContext?.get() ?: return
+        android.util.Log.i("WDTT_NET", "reconnectAll(reason=$reason, force=$force, preserveVpn=$preserveVpn)")
 
         scope.launch {
             reconnectMutex.withLock {

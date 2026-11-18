@@ -60,6 +60,8 @@ class TunnelService : Service() {
     @Volatile private var lastNetworkStateLogAtMs = 0L
     /** Неудачные попытки поднять туннель подряд — ограничиваем, чтобы не молотить вечно. */
     @Volatile private var failedRecoveryAttempts = 0
+    /** После любого переподключения сторож молчит: транспорт и воркеры ещё поднимаются. */
+    @Volatile private var watchdogGraceUntilMs = 0L
     /** Туннель «должен» работать: true с момента старта до явной остановки пользователем. */
     @Volatile private var wantedTunnelRunning = false
     /** Защита от повторного выполнения stopTunnel (stopTunnel → stopSelf → onDestroy). */
@@ -276,6 +278,7 @@ class TunnelService : Service() {
     private fun startTunnel(params: TunnelParams, forceStart: Boolean = false) {
         wantedTunnelRunning = true
         stopRequested = false
+        watchdogGraceUntilMs = System.currentTimeMillis() + 45_000L
         // Новый старт снимает состояние «ждём сеть» от прошлой паузы.
         isTunnelPaused = false
         recoveringFromNetworkLoss = false
@@ -366,6 +369,7 @@ class TunnelService : Service() {
                     activeNetworks.add(network)
                     empty
                 }
+                Log.i("TunnelService", "onAvailable $network (wasEmpty=$wasEmpty, paused=$isTunnelPaused)")
                 rememberNetworkFingerprint(network)
                 checkWifiStopOnTransition()
                 if (wasEmpty) {
@@ -390,6 +394,7 @@ class TunnelService : Service() {
                     networkFingerprints.remove(network)
                     activeNetworks.isEmpty()
                 }
+                Log.i("TunnelService", "onLost $network (nowEmpty=$nowEmpty, paused=$isTunnelPaused)")
                 checkWifiStopOnTransition()
                 if (nowEmpty && TunnelManager.running.value && !isTunnelPaused) {
                     isTunnelPaused = true
@@ -622,6 +627,7 @@ class TunnelService : Service() {
         if (TunnelManager.isReconnecting.value) return
 
         lastFastRecoveryAtMs = now
+        watchdogGraceUntilMs = now + 60_000L
         isTunnelPaused = false
         recoveringFromNetworkLoss = false
         wasOnWifi = isUnderlyingWifiPresent()
@@ -676,6 +682,9 @@ class TunnelService : Service() {
                 try {
                     if (!SettingsStore(applicationContext).fastNetworkReconnect.first()) continue
                     if (!wantedTunnelRunning) continue
+                    // Транспорт только что пересоздан — воркеры ещё поднимаются,
+                    // считать туннель «неживым» в этот момент нельзя.
+                    if (System.currentTimeMillis() < watchdogGraceUntilMs) continue
                     if (ManlCaptchaWebViewManager.isCaptchaPending) continue
                     if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) continue
 
@@ -731,6 +740,7 @@ class TunnelService : Service() {
                     val now = System.currentTimeMillis()
                     if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) continue
                     lastFastRecoveryAtMs = now
+                    watchdogGraceUntilMs = now + 60_000L
                     isTunnelPaused = false
                     recoveringFromNetworkLoss = false
                     updateNotificationOnMain("Переподключение...")
