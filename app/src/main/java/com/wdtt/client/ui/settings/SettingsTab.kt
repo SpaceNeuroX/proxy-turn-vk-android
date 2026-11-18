@@ -168,6 +168,7 @@ fun SettingsTabContent(
     }
     val autoSwitchToLogs by settingsStore.autoSwitchToLogs.collectAsStateWithLifecycle(initialValue = true)
     val stopOnWifi by settingsStore.stopOnWifi.collectAsStateWithLifecycle(initialValue = false)
+    val fastNetworkReconnect by settingsStore.fastNetworkReconnect.collectAsStateWithLifecycle(initialValue = false)
     val bypassAutoRefresh by settingsStore.bypassAutoRefresh.collectAsStateWithLifecycle(initialValue = true)
     val connectionPipelineEnabled by settingsStore.connectionPipelineEnabled.collectAsStateWithLifecycle(initialValue = true)
     val connectionMode by settingsStore.connectionMode.collectAsStateWithLifecycle(
@@ -931,6 +932,33 @@ fun SettingsTabContent(
                             checked = stopOnWifi,
                             onCheckedChange = { enabled ->
                                 scope.launch { settingsStore.saveStopOnWifi(enabled) }
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                "Быстрое переподключение при смене сети",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                "При смене сети (Wi-Fi ↔ мобильная) туннель сразу отключается и подключается заново, без ожидания стабилизации сети",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = fastNetworkReconnect,
+                            onCheckedChange = { enabled ->
+                                scope.launch { settingsStore.saveFastNetworkReconnect(enabled) }
                             }
                         )
                     }
