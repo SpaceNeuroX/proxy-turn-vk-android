@@ -58,6 +58,8 @@ class TunnelService : Service() {
     @Volatile private var wasOnWifi = false
     @Volatile private var lastFastRecoveryAtMs = 0L
     @Volatile private var lastNetworkStateLogAtMs = 0L
+    /** Неудачные попытки поднять туннель подряд — ограничиваем, чтобы не молотить вечно. */
+    @Volatile private var failedRecoveryAttempts = 0
     /** Туннель «должен» работать: true с момента старта до явной остановки пользователем. */
     @Volatile private var wantedTunnelRunning = false
     /** Защита от повторного выполнения stopTunnel (stopTunnel → stopSelf → onDestroy). */
@@ -684,10 +686,22 @@ class TunnelService : Service() {
                     // Туннель полностью упал (старт не удался) — поднимаем заново целиком.
                     if (!TunnelManager.running.value && !isTunnelPaused) {
                         if (!usable) continue
+                        if (failedRecoveryAttempts >= 5) {
+                            if (System.currentTimeMillis() - lastNetworkStateLogAtMs >= 60_000L) {
+                                lastNetworkStateLogAtMs = System.currentTimeMillis()
+                                TunnelManager.addNetworkLog(
+                                    "[СЕТЬ] Сторож: 5 попыток подряд не удались — останавливаемся, нужна ручная проверка настроек."
+                                )
+                            }
+                            continue
+                        }
                         val now = System.currentTimeMillis()
                         if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) continue
                         lastFastRecoveryAtMs = now
-                        TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель остановлен после сбоя — запускаем заново.")
+                        failedRecoveryAttempts += 1
+                        TunnelManager.addNetworkLog(
+                            "[СЕТЬ] Сторож: туннель остановлен после сбоя — запускаем заново (попытка $failedRecoveryAttempts)."
+                        )
                         launch(Dispatchers.Main) {
                             onStartCommand(
                                 Intent(applicationContext, TunnelService::class.java)
@@ -698,6 +712,8 @@ class TunnelService : Service() {
                         }
                         continue
                     }
+
+                    if (alive) failedRecoveryAttempts = 0
 
                     if (!usable || alive) {
                         val now = System.currentTimeMillis()
@@ -892,6 +908,14 @@ class TunnelService : Service() {
                         if (TunnelManager.isConnecting.value) {
                             val connectingText = TunnelManager.stats.value.trim().ifEmpty { "Подключение..." }
                             updateNotification(connectingText)
+                            delay(2000)
+                            continue
+                        }
+                        // Сбой сразу после попытки восстановления сети: не убиваем сервис,
+                        // даём сторожу поднять туннель заново (ограниченное окно, чтобы не
+                        // рестартовать бесконечно при неверной конфигурации).
+                        val recentRecoveryAttempt = System.currentTimeMillis() - lastFastRecoveryAtMs < 120_000L
+                        if (wantedTunnelRunning && recentRecoveryAttempt && failedRecoveryAttempts < 5) {
                             delay(2000)
                             continue
                         }
