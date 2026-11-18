@@ -46,13 +46,22 @@ class TunnelService : Service() {
     private var wakeGraceUntilMs = 0L
     private var screenOffAtMs = 0L
     private var deviceWasInteractive = true
+    // Все сетевые коллекции читаются/пишутся из разных потоков (ConnectivityThread,
+    // IO-корутины сторожа, главный поток) — доступ только под networkLock.
+    private val networkLock = Any()
     private val activeNetworks = mutableSetOf<Network>()
     private val networkFingerprints = mutableMapOf<Network, String>()
-    private var lastUnderlyingFingerprint = ""
-    private var isTunnelPaused = false
-    private var recoveringFromNetworkLoss = false
-    private var lastVpnReconnectAttemptMs = 0L
-    private var wasOnWifi = false
+    @Volatile private var lastUnderlyingFingerprint = ""
+    @Volatile private var isTunnelPaused = false
+    @Volatile private var recoveringFromNetworkLoss = false
+    @Volatile private var lastVpnReconnectAttemptMs = 0L
+    @Volatile private var wasOnWifi = false
+    @Volatile private var lastFastRecoveryAtMs = 0L
+    @Volatile private var lastNetworkStateLogAtMs = 0L
+    /** Туннель «должен» работать: true с момента старта до явной остановки пользователем. */
+    @Volatile private var wantedTunnelRunning = false
+    /** Защита от повторного выполнения stopTunnel (stopTunnel → stopSelf → onDestroy). */
+    @Volatile private var stopRequested = false
     private var recoveryWatchdogJob: Job? = null
 
     override fun onCreate() {
@@ -263,6 +272,11 @@ class TunnelService : Service() {
     }
 
     private fun startTunnel(params: TunnelParams, forceStart: Boolean = false) {
+        wantedTunnelRunning = true
+        stopRequested = false
+        // Новый старт снимает состояние «ждём сеть» от прошлой паузы.
+        isTunnelPaused = false
+        recoveringFromNetworkLoss = false
         // Учитываем и невалидированный Wi‑Fi: иначе через секунду VALIDATED
         // выглядит как «переход на Wi‑Fi» и стоп по опции убивает ручной старт.
         wasOnWifi = isUnderlyingWifiActive() || isUnderlyingWifiPresent()
@@ -306,6 +320,9 @@ class TunnelService : Service() {
     }
 
     private fun stopTunnel() {
+        if (stopRequested) return
+        stopRequested = true
+        wantedTunnelRunning = false
         updateJob?.cancel()
 
         // Уничтожаем текущий WebView (если капча решается) и чистим контекст
@@ -334,13 +351,19 @@ class TunnelService : Service() {
 
     private fun setupNetworkCallback() {
         connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-        activeNetworks.clear()
+        synchronized(networkLock) {
+            activeNetworks.clear()
+            networkFingerprints.clear()
+        }
         
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 super.onAvailable(network)
-                val wasEmpty = activeNetworks.isEmpty()
-                activeNetworks.add(network)
+                val wasEmpty = synchronized(networkLock) {
+                    val empty = activeNetworks.isEmpty()
+                    activeNetworks.add(network)
+                    empty
+                }
                 rememberNetworkFingerprint(network)
                 checkWifiStopOnTransition()
                 if (wasEmpty) {
@@ -348,7 +371,7 @@ class TunnelService : Service() {
                         isTunnelPaused = false
                         Log.d("TunnelService", "Сеть появилась, возобновляем туннель")
                         recoveringFromNetworkLoss = true
-                        updateNotification("Ожидание сети...")
+                        updateNotificationOnMain("Ожидание сети...")
                         scheduleNetworkReturnRecovery()
                     } else {
                         noteUnderlyingNetworkChange()
@@ -360,16 +383,18 @@ class TunnelService : Service() {
 
             override fun onLost(network: Network) {
                 super.onLost(network)
-                activeNetworks.remove(network)
-                networkFingerprints.remove(network)
+                val nowEmpty = synchronized(networkLock) {
+                    activeNetworks.remove(network)
+                    networkFingerprints.remove(network)
+                    activeNetworks.isEmpty()
+                }
                 checkWifiStopOnTransition()
-                if (activeNetworks.isEmpty() && TunnelManager.running.value && !isTunnelPaused) {
+                if (nowEmpty && TunnelManager.running.value && !isTunnelPaused) {
                     isTunnelPaused = true
                     recoveringFromNetworkLoss = true
-                    lastUnderlyingFingerprint = ""
                     Log.d("TunnelService", "Сеть потеряна, приостанавливаем туннель")
                     TunnelManager.pause()
-                    updateNotification("Ожидание сети...")
+                    updateNotificationOnMain("Ожидание сети...")
                 } else {
                     noteUnderlyingNetworkChange()
                 }
@@ -377,8 +402,8 @@ class TunnelService : Service() {
 
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
                 super.onCapabilitiesChanged(network, networkCapabilities)
-                if (network !in activeNetworks) return
-                val prev = networkFingerprints[network]
+                if (!isTrackedNetwork(network)) return
+                val prev = networkFingerprintOf(network)
                 val next = rememberNetworkFingerprint(network)
                 checkWifiStopOnTransition()
                 if (prev != null && prev != next) {
@@ -388,7 +413,7 @@ class TunnelService : Service() {
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 super.onLinkPropertiesChanged(network, linkProperties)
-                if (network !in activeNetworks) return
+                if (!isTrackedNetwork(network)) return
                 checkWifiStopOnTransition()
                 noteUnderlyingNetworkChange()
             }
@@ -405,13 +430,25 @@ class TunnelService : Service() {
         wasOnWifi = isUnderlyingWifiPresent()
     }
 
+    private fun isTrackedNetwork(network: Network): Boolean = synchronized(networkLock) {
+        network in activeNetworks
+    }
+
+    private fun networkFingerprintOf(network: Network): String? = synchronized(networkLock) {
+        networkFingerprints[network]
+    }
+
+    private fun trackedNetworks(): List<Network> = synchronized(networkLock) {
+        activeNetworks.toList()
+    }
+
     /**
      * Wi‑Fi для stop-on-Wi‑Fi: только валидированная сеть.
      * Иначе на OnePlus Wi‑Fi уже в activeNetworks до переключения трафика.
      */
     private fun isUnderlyingWifiActive(): Boolean {
         val cm = connectivityManager ?: return false
-        return activeNetworks.any { network ->
+        return trackedNetworks().any { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@any false
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
@@ -419,10 +456,42 @@ class TunnelService : Service() {
         }
     }
 
+    /**
+     * Сеть пригодна для работы: есть реальная (не VPN) сеть с доступом в интернет.
+     * ВАЖНО: не требуем NET_CAPABILITY_VALIDATED — системная проверка доступности
+     * у операторов часто заблокирована, флаг может не появиться вообще, и тогда
+     * восстановление туннеля не запускалось бы никогда.
+     */
+    private fun isUsableUnderlyingNetwork(): Boolean {
+        val cm = connectivityManager ?: return false
+        return trackedNetworks().any { network ->
+            cm.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        }
+    }
+
+    /** Человекочитаемое состояние сети для журнала (диагностика). */
+    private fun describeUnderlyingNetwork(): String {
+        val cm = connectivityManager ?: return "нет менеджера сети"
+        val parts = trackedNetworks().map { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            val transport = when {
+                caps == null -> "?"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "eth"
+                else -> "other"
+            }
+            val validated = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+            "$transport{internet=${caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true}, validated=$validated}"
+        }
+        return if (parts.isEmpty()) "сетей нет" else parts.joinToString(", ")
+    }
+
     /** Wi‑Fi уже всплыл, но ещё может быть без VALIDATED (момент перед стопом). */
     private fun isUnderlyingWifiPresent(): Boolean {
         val cm = connectivityManager ?: return false
-        return activeNetworks.any { network ->
+        return trackedNetworks().any { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@any false
             caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -445,15 +514,17 @@ class TunnelService : Service() {
         val cm = connectivityManager ?: return ""
         val caps = cm.getNetworkCapabilities(network) ?: return ""
         val fingerprint = networkCapabilityFingerprint(caps)
-        networkFingerprints[network] = fingerprint
+        synchronized(networkLock) { networkFingerprints[network] = fingerprint }
         return fingerprint
     }
 
     private fun activeUnderlyingFingerprint(): String {
         val cm = connectivityManager ?: return ""
-        return activeNetworks.mapNotNull { network ->
+        return trackedNetworks().mapNotNull { network ->
             val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return@mapNotNull null
+            // VALIDATED намеренно не фильтруем: у операторов флаг часто не приходит,
+            // и тогда изменения сети оставались бы невидимыми.
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return@mapNotNull null
             "$network:${networkCapabilityFingerprint(caps)}"
         }.sorted().joinToString("|")
     }
@@ -461,12 +532,13 @@ class TunnelService : Service() {
     private fun noteUnderlyingNetworkChange() {
         val fingerprint = activeUnderlyingFingerprint()
         if (fingerprint.isEmpty()) return
-        if (lastUnderlyingFingerprint.isEmpty()) {
-            lastUnderlyingFingerprint = fingerprint
-            return
-        }
-        if (fingerprint == lastUnderlyingFingerprint) return
+        val previous = lastUnderlyingFingerprint
+        if (fingerprint == previous) return
         lastUnderlyingFingerprint = fingerprint
+        // Первое наблюдение сети после старта сервиса не должно рвать только что
+        // поднятый туннель. Но если туннель ждёт сеть (пауза/восстановление) —
+        // это событие и есть возврат сети, его терять нельзя.
+        if (previous.isEmpty() && !isTunnelPaused && !recoveringFromNetworkLoss) return
         handleNetworkChange()
     }
 
@@ -494,67 +566,105 @@ class TunnelService : Service() {
         }
     }
 
-    private fun scheduleNetworkReturnRecovery() {
+    /** Ждём появление сети до этого срока, затем переподключаемся в любом случае. */
+    private val fastNetworkWaitMs = 20_000L
+    /** Минимальный интервал между принудительными переподключениями. */
+    private val fastReconnectCooldownMs = 8_000L
+
+    private fun scheduleNetworkReturnRecovery() = scheduleRecovery(waitForNetwork = true)
+
+    private fun scheduleNetworkRecovery() = scheduleRecovery(waitForNetwork = false)
+
+    private fun scheduleRecovery(waitForNetwork: Boolean) {
         networkRecoveryJob?.cancel()
         networkRecoveryJob = TunnelManager.scope.launch {
-            if (!TunnelManager.running.value || isTunnelPaused) return@launch
-            if (SettingsStore(applicationContext).fastNetworkReconnect.first()) {
-                TunnelManager.addNetworkLog("[СЕТЬ] Сеть появилась. Ждём подтверждения (до 3 с) и переподключаемся (быстрый режим).")
-                val validationDeadline = System.currentTimeMillis() + 3_000L
-                while (!hasValidatedUnderlyingNetwork() && System.currentTimeMillis() < validationDeadline) {
-                    if (!TunnelManager.running.value || isTunnelPaused) return@launch
-                    delay(200)
-                }
-                if (!TunnelManager.running.value || isTunnelPaused) return@launch
-                recoveringFromNetworkLoss = false
-                wasOnWifi = isUnderlyingWifiActive()
-                performNetworkRecovery("сеть появилась (быстрый режим)")
-                return@launch
+            val fast = SettingsStore(applicationContext).fastNetworkReconnect.first()
+            if (fast) {
+                runFastRecovery(waitForNetwork)
+            } else if (waitForNetwork) {
+                runSlowReturnRecovery()
+            } else {
+                runSlowNetworkRecovery()
             }
-            TunnelManager.addNetworkLog("[СЕТЬ] Сеть появилась. Ждём подтверждения и стабилизации.")
-            delay(5_000)
-            val validationDeadline = System.currentTimeMillis() + 25_000L
-            while (!hasValidatedUnderlyingNetwork() && System.currentTimeMillis() < validationDeadline) {
-                if (!TunnelManager.running.value || isTunnelPaused) return@launch
-                delay(1_000)
-            }
-            if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return@launch
-            recoveringFromNetworkLoss = false
-            wasOnWifi = isUnderlyingWifiActive()
-            performNetworkRecovery("сеть появилась")
         }
     }
 
-    private fun scheduleNetworkRecovery() {
-        networkRecoveryJob?.cancel()
-        networkRecoveryJob = TunnelManager.scope.launch {
-            if (!TunnelManager.running.value || isTunnelPaused) return@launch
-            if (SettingsStore(applicationContext).fastNetworkReconnect.first()) {
-                performNetworkRecovery("смена сети (быстрый режим)")
-                return@launch
+    /**
+     * Быстрый режим: сеть сменилась — сразу отключаем и поднимаем туннель заново.
+     * Не требуем VALIDATED (на мобильной сети флаг часто не приходит), ждём только
+     * появления пригодной сети, иначе повторяем по таймауту через сторожа.
+     */
+    private suspend fun runFastRecovery(waitForNetwork: Boolean) {
+        if (!wantedTunnelRunning) return
+        val reason = if (waitForNetwork) "сеть появилась (быстрый режим)" else "смена сети (быстрый режим)"
+        TunnelManager.addNetworkLog(
+            if (waitForNetwork) "[СЕТЬ] Сеть появилась: переподключаемся (быстрый режим)."
+            else "[СЕТЬ] Сеть изменилась: переподключаемся (быстрый режим)."
+        )
+
+        val deadline = System.currentTimeMillis() + fastNetworkWaitMs
+        while (!isUsableUnderlyingNetwork()) {
+            if (!wantedTunnelRunning) return
+            if (System.currentTimeMillis() >= deadline) {
+                TunnelManager.addNetworkLog("[СЕТЬ] Сети пока нет — продолжаем ждать (сторож проверит снова).")
+                return
             }
-            TunnelManager.addNetworkLog("[СЕТЬ] Сеть изменилась. Ждём стабилизации и переподключаемся.")
-            delay(4_000)
-            if (!TunnelManager.running.value || isTunnelPaused ||
-                System.currentTimeMillis() < wakeGraceUntilMs || !hasValidatedUnderlyingNetwork()) return@launch
-            performNetworkRecovery("смена сети")
+            delay(250)
         }
+
+        val now = System.currentTimeMillis()
+        if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) {
+            TunnelManager.addNetworkLog("[СЕТЬ] Переподключение уже выполнялось недавно — пропускаем повтор.")
+            return
+        }
+        if (TunnelManager.isReconnecting.value) return
+
+        lastFastRecoveryAtMs = now
+        isTunnelPaused = false
+        recoveringFromNetworkLoss = false
+        wasOnWifi = isUnderlyingWifiPresent()
+        updateNotificationOnMain("Переподключение...")
+        TunnelManager.addNetworkLog("[СЕТЬ] Пересоздаём VPN и транспорт для новой сети.")
+        TunnelManager.reconnectAll(reason, force = true)
+    }
+
+    private suspend fun runSlowReturnRecovery() {
+        if (!TunnelManager.running.value || isTunnelPaused) return
+        TunnelManager.addNetworkLog("[СЕТЬ] Сеть появилась. Ждём подтверждения и стабилизации.")
+        delay(5_000)
+        val validationDeadline = System.currentTimeMillis() + 25_000L
+        while (!hasValidatedUnderlyingNetwork() && System.currentTimeMillis() < validationDeadline) {
+            if (!TunnelManager.running.value || isTunnelPaused) return
+            delay(1_000)
+        }
+        if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return
+        recoveringFromNetworkLoss = false
+        wasOnWifi = isUnderlyingWifiActive()
+        performNetworkRecovery("сеть появилась")
+    }
+
+    private suspend fun runSlowNetworkRecovery() {
+        if (!TunnelManager.running.value || isTunnelPaused) return
+        TunnelManager.addNetworkLog("[СЕТЬ] Сеть изменилась. Ждём стабилизации и переподключаемся.")
+        delay(4_000)
+        if (!TunnelManager.running.value || isTunnelPaused ||
+            System.currentTimeMillis() < wakeGraceUntilMs || !hasValidatedUnderlyingNetwork()) return
+        performNetworkRecovery("смена сети")
     }
 
     private suspend fun performNetworkRecovery(reason: String) {
         if (!TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return
         lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
-        updateNotification("Переподключение...")
+        updateNotificationOnMain("Переподключение...")
         TunnelManager.addNetworkLog("[СЕТЬ] Пересоздаём VPN и транспорт для новой сети.")
         TunnelManager.reconnectAll(reason, force = true)
     }
 
     /**
      * Сторож быстрого переподключения: страховка от «потерянных» сетевых событий.
-     * Если туннель должен работать (жив или на паузе из-за сети), но подключения
-     * нет и трафика давно не было — принудительно перезапускаем туннель.
-     * Работает только при включённой настройке быстрого переподключения
-     * и только при наличии сети с подтверждением (VALIDATED).
+     * Если туннель должен работать, сеть есть, но ни транспорта, ни трафика нет —
+     * принудительно переподключаем. Работает и при выключенном экране.
+     * VALIDATED не требуется (см. isUsableUnderlyingNetwork).
      */
     private fun startRecoveryWatchdog() {
         recoveryWatchdogJob?.cancel()
@@ -563,23 +673,53 @@ class TunnelService : Service() {
                 delay(10_000)
                 try {
                     if (!SettingsStore(applicationContext).fastNetworkReconnect.first()) continue
-                    // Туннель должен работать: жив либо на паузе из-за пропавшей сети.
-                    // Полностью остановленный (пользователем или «Отключать на Wi-Fi») не трогаем.
-                    if (!TunnelManager.running.value && !isTunnelPaused) continue
-                    if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) continue
-                    // Капча решается — воркеры молчат легально, рестарт убьёт WebView.
+                    if (!wantedTunnelRunning) continue
                     if (ManlCaptchaWebViewManager.isCaptchaPending) continue
-                    // Нет сети с подтверждением — ждём её появления, не молотим.
-                    if (!hasValidatedUnderlyingNetwork()) continue
-                    // Туннель жив и недавний трафик был — всё в порядке.
-                    if (TunnelManager.running.value && TunnelManager.hasRecentTransportActivity(30_000L)) continue
+                    if (TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value) continue
+
+                    val usable = isUsableUnderlyingNetwork()
+                    val alive = TunnelManager.running.value &&
+                        TunnelManager.hasRecentTransportActivity(30_000L)
+
+                    // Туннель полностью упал (старт не удался) — поднимаем заново целиком.
+                    if (!TunnelManager.running.value && !isTunnelPaused) {
+                        if (!usable) continue
+                        val now = System.currentTimeMillis()
+                        if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) continue
+                        lastFastRecoveryAtMs = now
+                        TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель остановлен после сбоя — запускаем заново.")
+                        launch(Dispatchers.Main) {
+                            onStartCommand(
+                                Intent(applicationContext, TunnelService::class.java)
+                                    .apply { action = "START_SAVED" },
+                                0,
+                                0
+                            )
+                        }
+                        continue
+                    }
+
+                    if (!usable || alive) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastNetworkStateLogAtMs >= 30_000L) {
+                            lastNetworkStateLogAtMs = now
+                            TunnelManager.addNetworkLog(
+                                "[СЕТЬ] Состояние: ${describeUnderlyingNetwork()}, " +
+                                    "workers=${TunnelManager.activeWorkers.value}, " +
+                                    if (alive) "трафик идёт" else "трафика нет"
+                            )
+                        }
+                        continue
+                    }
+
+                    val now = System.currentTimeMillis()
+                    if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) continue
+                    lastFastRecoveryAtMs = now
                     isTunnelPaused = false
                     recoveringFromNetworkLoss = false
-                    lastNetworkRecoveryAttemptMs = System.currentTimeMillis()
-                    updateNotification("Переподключение...")
-                    TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель не переподключился сам, принудительный рестарт.")
-                    // Без force: guard MIN_RECONNECT_INTERVAL_MS ограничивает частоту,
-                    // иначе при постоянной ошибке подключения рестарт каждые 10 с.
+                    updateNotificationOnMain("Переподключение...")
+                    TunnelManager.addNetworkLog("[СЕТЬ] Сторож: туннель не восстановился сам — принудительный рестарт.")
+                    // Без force: MIN_RECONNECT_INTERVAL_MS в TunnelManager ограничивает частоту.
                     TunnelManager.reconnectAll("сторож смены сети")
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
@@ -593,7 +733,7 @@ class TunnelService : Service() {
 
     private fun hasValidatedUnderlyingNetwork(): Boolean {
         val cm = connectivityManager ?: return false
-        return activeNetworks.any { network ->
+        return trackedNetworks().any { network ->
             cm.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         }
     }
@@ -643,12 +783,19 @@ class TunnelService : Service() {
         wakeRecoveryJob?.cancel()
         wakeGraceUntilMs = System.currentTimeMillis() + 30_000L
         wakeRecoveryJob = TunnelManager.scope.launch {
-            if (!TunnelManager.running.value || isTunnelPaused) return@launch
+            if (!wantedTunnelRunning || isTunnelPaused) return@launch
+            val fast = SettingsStore(applicationContext).fastNetworkReconnect.first()
             TunnelManager.addNetworkLog(
                 "[СОН] Устройство проснулось (экран был выключен ${screenOffDurationMs / 1000} с); потоки проверяют себя сами."
             )
             delay(25_000)
-            if (!deviceWasInteractive || !TunnelManager.running.value || isTunnelPaused || !hasValidatedUnderlyingNetwork()) return@launch
+            if (!deviceWasInteractive || !wantedTunnelRunning || isTunnelPaused) return@launch
+            // В быстром режиме VALIDATED не требуется — на мобильной сети флаг может не прийти.
+            if (fast) {
+                if (!isUsableUnderlyingNetwork()) return@launch
+            } else if (!hasValidatedUnderlyingNetwork()) {
+                return@launch
+            }
             if (TunnelManager.hasRecentTransportActivity(45_000L)) {
                 TunnelManager.addNetworkLog("[СОН] Туннель работает после пробуждения.")
                 return@launch
@@ -848,6 +995,11 @@ class TunnelService : Service() {
         } else {
             startForeground(TUNNEL_NOTIFICATION_ID, notification)
         }
+    }
+
+    /** Обновление уведомления из фонового потока (startForeground должен идти с Main). */
+    private fun updateNotificationOnMain(text: String) {
+        TunnelManager.scope.launch(Dispatchers.Main) { updateNotification(text) }
     }
 
     private fun updateNotification(text: String) {

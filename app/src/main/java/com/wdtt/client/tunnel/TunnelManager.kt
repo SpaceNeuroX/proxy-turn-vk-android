@@ -1589,10 +1589,23 @@ object TunnelManager {
         }
     }
 
+    /**
+     * Пауза из-за пропажи сети: транспорт останавливаем и VPN-интерфейс опускаем.
+     * Иначе интерфейс остаётся поднятым с мёртвым транспортом — трафик уходит
+     * «в никуда», и у устройства пропадает интернет до восстановления туннеля.
+     */
     fun pause() {
         if (!running.value) return
         killProcess() // Не ставим running=false, чтоб сервис не умер
         activeWorkers.value = 0
+        val params = currentParams
+        val ctx = lastContext?.get()
+        scope.launch(Dispatchers.IO) {
+            runCatching { wgHelper?.stopTunnel() }
+            if (params?.isRawTunMode == true && ctx != null) {
+                runCatching { RawTunEngine.stop(ctx) }
+            }
+        }
     }
 
     fun resume() {
