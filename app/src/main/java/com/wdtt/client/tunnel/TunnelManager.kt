@@ -1953,6 +1953,20 @@ object TunnelManager {
         }
     }
 
+    /** Процесс Go-транспорта жив. */
+    fun isTransportAlive(): Boolean = process?.isAlive == true
+
+    /**
+     * Пинаем планировщик liveness всех воркеров: Go сам шлёт immediate keepalive
+     * и перестраивает мёртвые потоки на новой сети. Ошибка записи → false,
+     * повтор/дебаунс остаётся на вызывающей стороне.
+     */
+    fun pokeLiveness(reason: String): Boolean {
+        if (!writeGoCommand("NETWORK_CHANGED")) return false
+        addNetworkLog("[СЕТЬ] $reason: пинаем воркеры (NETWORK_CHANGED)")
+        return true
+    }
+
     /** Одна строка-команда в stdin Go-процесса. false — процесса нет или запись не удалась. */
     private fun writeGoCommand(command: String): Boolean {
         val proc = process

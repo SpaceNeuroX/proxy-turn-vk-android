@@ -40,6 +40,7 @@ class TunnelService : Service() {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkRecoveryJob: Job? = null
+    private var pokeEscalationJob: Job? = null
     private var lastNetworkRecoveryAttemptMs = 0L
     private var screenStateReceiver: BroadcastReceiver? = null
     private var wakeRecoveryJob: Job? = null
@@ -619,15 +620,44 @@ class TunnelService : Service() {
             delay(250)
         }
 
+        // Живой транспорт на обычной смене сети: сначала лёгкий пинок воркерам,
+        // без пересоздания VPN. Если трафик не возобновится — эскалация ниже.
+        if (!waitForNetwork &&
+            TunnelManager.running.value &&
+            !isTunnelPaused &&
+            TunnelManager.isTransportAlive() &&
+            !(TunnelManager.isConnecting.value || TunnelManager.isReconnecting.value)
+        ) {
+            if (TunnelManager.pokeLiveness("Смена сети")) {
+                pokeEscalationJob?.cancel()
+                pokeEscalationJob = TunnelManager.scope.launch {
+                    delay(12_000)
+                    if (wantedTunnelRunning &&
+                        isUsableUnderlyingNetwork() &&
+                        !TunnelManager.hasRecentTransportActivity(12_000L)
+                    ) {
+                        TunnelManager.addNetworkLog("[СЕТЬ] Пинок не помог за 12с — рестарт транспорта с сохранением VPN")
+                        TunnelManager.restartTransport("пинок не помог", force = true)
+                    }
+                }
+                return
+            }
+            // Запись не удалась — падаем в полный reconnectAll.
+        }
+
         val now = System.currentTimeMillis()
-        if (now - lastFastRecoveryAtMs < fastReconnectCooldownMs) {
-            TunnelManager.addNetworkLog("[СЕТЬ] Переподключение уже выполнялось недавно — пропускаем повтор.")
-            return
+        val timeSinceLast = now - lastFastRecoveryAtMs
+        if (timeSinceLast < fastReconnectCooldownMs) {
+            val waitMs = fastReconnectCooldownMs - timeSinceLast
+            TunnelManager.addNetworkLog("[СЕТЬ] Кулдаун — переподключение отложено на ${waitMs / 1000} с")
+            delay(waitMs)
+            if (!wantedTunnelRunning) return
         }
         if (TunnelManager.isReconnecting.value) return
 
-        lastFastRecoveryAtMs = now
-        watchdogGraceUntilMs = now + 60_000L
+        val reconnectNow = System.currentTimeMillis()
+        lastFastRecoveryAtMs = reconnectNow
+        watchdogGraceUntilMs = reconnectNow + 60_000L
         isTunnelPaused = false
         recoveringFromNetworkLoss = false
         wasOnWifi = isUnderlyingWifiPresent()
