@@ -47,7 +47,10 @@ if [[ -n "$NDK_DIR" && ! -d "$NDK_DIR/toolchains/llvm/prebuilt" ]]; then
 fi
 
 if [[ -z "$NDK_DIR" && -f "$ROOT_DIR/local.properties" ]]; then
-  SDK_DIR="$(grep -E '^sdk\.dir=' "$ROOT_DIR/local.properties" | head -n1 | cut -d= -f2- || true)"
+  # local.properties хранит путь в формате Java Properties (Android Studio
+  # экранирует `:` и `\`): `sdk.dir=C\:\\Users\\...`. Расэкранируем и приводим
+  # к `C:/...`, иначе find ниже не видит каталог.
+  SDK_DIR="$(grep -E '^sdk\.dir=' "$ROOT_DIR/local.properties" | head -n1 | cut -d= -f2- | sed -e 's/\\:/:/g' -e 's/\\\\/\//g' || true)"
   if [[ -n "$SDK_DIR" ]]; then
     NDK_DIR="$(find "$SDK_DIR/ndk" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -n1 || true)"
   fi
