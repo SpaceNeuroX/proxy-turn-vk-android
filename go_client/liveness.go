@@ -48,9 +48,11 @@ const (
 // lowPowerMode — экран выключен (команды SCREEN_OFF/SCREEN_ON из stdin).
 var lowPowerMode atomic.Bool
 
-// networkPoke — Kotlin прислал NETWORK_CHANGED: проверить живость всех
-// потоков немедленно, мёртвые снимаются за livenessWakeWindow.
-var networkPoke atomic.Bool
+// networkPokeGen — глобальный счётчик «пинков» от приложения при смене
+// сети (NETWORK_CHANGED). Каждый планер запоминает потреблённое поколение
+// и будится ровно один раз на каждый пинок — будятся ВСЕ потоки, а не
+// первый тикнувший.
+var networkPokeGen atomic.Int64
 
 // serverAnswersKeepalive — сервер хоть раз ответил на keepalive (любому
 // потоку). Признак общий на весь клиент: один процесс — один сервер. Если
@@ -109,6 +111,7 @@ type livenessPlanner struct {
 	lastTick      time.Time
 	nextKeepalive time.Time
 	wasSleeping   bool
+	lastPokeGen   int64 // последнее поколение networkPokeGen, которое видел планер
 }
 
 func newLivenessPlanner(l *sessionLiveness, now time.Time) *livenessPlanner {
@@ -144,8 +147,9 @@ func (p *livenessPlanner) step(now time.Time, sleeping bool) livenessStep {
 		p.nextKeepalive = now
 		st.woke = true
 	}
-	if networkPoke.CompareAndSwap(true, false) {
+	if gen := networkPokeGen.Load(); gen > p.lastPokeGen {
 		// Смена сети: проверяем всех сразу, мёртвые снимаются за livenessWakeWindow.
+		p.lastPokeGen = gen
 		p.l.grace(now, timeout)
 		p.nextKeepalive = now
 		st.woke = true

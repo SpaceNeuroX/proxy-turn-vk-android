@@ -191,12 +191,16 @@ func TestLivenessGraceNeverShortensWindow(t *testing.T) {
 func TestPlannerNetworkPoke(t *testing.T) {
 	s := newSim(t)
 	s.run(10*time.Second, false, true)
+	// Делаем lastRx устаревшим, но не настолько, чтобы поток умер до пинка.
+	// Тишина 10 с < livenessTimeout (15 с), поток всё ещё жив.
+	s.run(10*time.Second, false, false)
 
 	// Пинок от Kotlin при смене сети: проверяем все потоки сразу,
 	// мёртвые снимаются за livenessWakeWindow.
-	networkPoke.Store(true)
+	networkPokeGen.Add(1)
 
 	// Первый тик после пинка — пробуждение и немедленный keepalive.
+	// grace поднимает lastRx до now-(livenessTimeout-livenessWakeWindow).
 	s.now = s.now.Add(livenessTick)
 	st := s.p.step(s.now, false)
 	if !st.woke {
@@ -205,20 +209,40 @@ func TestPlannerNetworkPoke(t *testing.T) {
 	if !st.sendKeepalive {
 		t.Fatal("network poke must send keepalive immediately")
 	}
+	silent, _ := s.l.silentFor(s.now, livenessTimeout)
+	if silent != livenessTimeout-livenessWakeWindow {
+		t.Fatalf("network poke grace silentFor=%v, want %v", silent, livenessTimeout-livenessWakeWindow)
+	}
 
-	// Флаг потреблён однократно: второй тик без нового пинка не keepalive.
+	// Поколение потреблено однократно: второй тик без нового пинка не keepalive.
 	s.now = s.now.Add(livenessTick)
 	st = s.p.step(s.now, false)
 	if st.woke {
-		t.Fatal("woke must not be set on the second step without a poke")
+		t.Fatal("woke must not be set on the second step without a new poke")
 	}
 	if st.sendKeepalive {
-		t.Fatal("network poke is one-shot; second step must not send keepalive prematurely")
+		t.Fatal("network poke generation is one-shot; second step must not send keepalive prematurely")
 	}
 
-	// Grace даёт окно смерти не длиннее livenessWakeWindow.
-	silent, _ := s.l.silentFor(s.now, livenessTimeout)
-	if silent > livenessTimeout-livenessWakeWindow {
-		t.Fatalf("network poke grace silentFor=%v, want ≤ %v", silent, livenessTimeout-livenessWakeWindow)
+	// Новое поколение пинка снова будит этот же планер.
+	networkPokeGen.Add(1)
+	s.now = s.now.Add(livenessTick)
+	st = s.p.step(s.now, false)
+	if !st.woke {
+		t.Fatal("new poke generation must wake planner again")
+	}
+	if !st.sendKeepalive {
+		t.Fatal("new poke generation must send keepalive immediately")
+	}
+
+	// Мёртвый поток снимается быстро после пинка: окно livenessWakeWindow + тик.
+	s2 := newSim(t)
+	s2.run(10*time.Second, false, true)
+	s2.run(10*time.Second, false, false)
+	pokeAt := s2.now
+	networkPokeGen.Add(1)
+	dead := s2.run(30*time.Second, false, false)
+	if dead == 0 || dead-pokeAt.Sub(s2.t0) > 7*time.Second {
+		t.Fatalf("dead flow after network poke dropped at +%v, want ≤ 7 s", dead-pokeAt.Sub(s2.t0))
 	}
 }

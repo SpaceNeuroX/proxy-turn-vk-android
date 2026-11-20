@@ -166,7 +166,7 @@ func main() {
 				lowPowerMode.Store(false)
 			case line == "NETWORK_CHANGED":
 				// Смена сети: проверяем все потоки сразу, как при включении экрана.
-				networkPoke.Store(true)
+				networkPokeGen.Add(1)
 			case line == "STOP":
 				cancel()
 				armShutdownWatchdog()
