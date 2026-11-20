@@ -106,6 +106,18 @@ func sanitizeHashCheckMessage(message string) string {
 	return message
 }
 
+// armShutdownWatchdog запускает горутину, которая через 5 с принудительно
+// завершает процесс, если graceful shutdown застрял. Страхует от зомби-
+// процессов, которые остаются после STOP/сигнала из-за зависших в futex_wait
+// горутин.
+func armShutdownWatchdog() {
+	go func() {
+		time.Sleep(5 * time.Second)
+		log.Printf("[КЛИЕНТ] Graceful shutdown не завершился за 5с — принудительный выход")
+		os.Exit(0)
+	}()
+}
+
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
@@ -120,6 +132,7 @@ func main() {
 		case s := <-sig:
 			log.Printf("[КЛИЕНТ] Сигнал %v, завершаю...", s)
 			cancel()
+			armShutdownWatchdog()
 		case <-ctx.Done():
 			return
 		}
@@ -153,6 +166,7 @@ func main() {
 				lowPowerMode.Store(false)
 			case line == "STOP":
 				cancel()
+				armShutdownWatchdog()
 				return
 			case strings.HasPrefix(line, "CAPTCHA_RESULT|"):
 				result := strings.TrimPrefix(line, "CAPTCHA_RESULT|")

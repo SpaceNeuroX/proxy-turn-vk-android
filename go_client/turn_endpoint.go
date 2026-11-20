@@ -139,6 +139,10 @@ func dialTURNConn(ctx context.Context, t turnTarget) (net.PacketConn, io.Closer,
 		if err != nil {
 			return nil, nil, fmt.Errorf("подключение TURN TCP: %w", err)
 		}
+		// При отмене сессии закрываем TCP-сокет явно: если воркер застрял
+		// в блокирующем read/write, Close разблокирует его и позволит
+		// завершиться, не дожидаясь таймаута ОС.
+		context.AfterFunc(ctx, func() { _ = c.Close() })
 		return turn.NewSTUNConn(c), c, nil
 	}
 	resolved, err := net.ResolveUDPAddr("udp", t.Addr)
