@@ -41,6 +41,8 @@ class TunnelService : Service() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkRecoveryJob: Job? = null
     private var pokeEscalationJob: Job? = null
+    private var lossDebounceJob: Job? = null
+    private var changeDebounceJob: Job? = null
     private var lastNetworkRecoveryAttemptMs = 0L
     private var screenStateReceiver: BroadcastReceiver? = null
     private var wakeRecoveryJob: Job? = null
@@ -330,6 +332,9 @@ class TunnelService : Service() {
         stopRequested = true
         wantedTunnelRunning = false
         updateJob?.cancel()
+        lossDebounceJob?.cancel()
+        changeDebounceJob?.cancel()
+        pokeEscalationJob?.cancel()
 
         // Уничтожаем текущий WebView (если капча решается) и чистим контекст
         CaptchaWebViewManager.onTunnelStop()
@@ -374,7 +379,12 @@ class TunnelService : Service() {
                 rememberNetworkFingerprint(network)
                 checkWifiStopOnTransition()
                 if (wasEmpty) {
-                    if (isTunnelPaused) {
+                    if (!isTunnelPaused && lossDebounceJob?.isActive == true) {
+                        // Сеть вернулась раньше 2с — это флап, паузу не начинали.
+                        lossDebounceJob?.cancel()
+                        TunnelManager.addNetworkLog("[СЕТЬ] Сеть вернулась в окне дебаунса — флап, туннель не трогаем")
+                        noteUnderlyingNetworkChange()
+                    } else if (isTunnelPaused) {
                         isTunnelPaused = false
                         Log.d("TunnelService", "Сеть появилась, возобновляем туннель")
                         recoveringFromNetworkLoss = true
@@ -398,11 +408,18 @@ class TunnelService : Service() {
                 Log.i("TunnelService", "onLost $network (nowEmpty=$nowEmpty, paused=$isTunnelPaused)")
                 checkWifiStopOnTransition()
                 if (nowEmpty && TunnelManager.running.value && !isTunnelPaused) {
-                    isTunnelPaused = true
-                    recoveringFromNetworkLoss = true
-                    Log.d("TunnelService", "Сеть потеряна, приостанавливаем туннель")
-                    TunnelManager.pause()
-                    updateNotificationOnMain("Ожидание сети...")
+                    // Дебаунс потери сети: флап <2с не должен рвать туннель.
+                    lossDebounceJob?.cancel()
+                    lossDebounceJob = TunnelManager.scope.launch {
+                        delay(2_000)
+                        if (!wantedTunnelRunning || !TunnelManager.running.value) return@launch
+                        if (trackedNetworks().isNotEmpty()) return@launch
+                        isTunnelPaused = true
+                        recoveringFromNetworkLoss = true
+                        TunnelManager.addNetworkLog("[СЕТЬ] Сеть потеряна (2с без сетей) — приостанавливаем туннель")
+                        TunnelManager.pause()
+                        updateNotificationOnMain("Ожидание сети...")
+                    }
                 } else {
                     noteUnderlyingNetworkChange()
                 }
@@ -547,7 +564,16 @@ class TunnelService : Service() {
         // поднятый туннель. Но если туннель ждёт сеть (пауза/восстановление) —
         // это событие и есть возврат сети, его терять нельзя.
         if (previous.isEmpty() && !isTunnelPaused && !recoveringFromNetworkLoss) return
-        handleNetworkChange()
+        // Дебаунс смены сети: несколько событий подряд схлопываем в одно,
+        // действуем по отпечатку, на котором сеть устаканилась.
+        changeDebounceJob?.cancel()
+        changeDebounceJob = TunnelManager.scope.launch {
+            delay(1_500)
+            if (!wantedTunnelRunning) return@launch
+            val nowFp = activeUnderlyingFingerprint()
+            if (nowFp != fingerprint) return@launch
+            handleNetworkChange()
+        }
     }
 
     private fun checkWifiStopOnTransition() {
@@ -1082,6 +1108,7 @@ class TunnelService : Service() {
         networkRecoveryJob?.cancel()
         wakeRecoveryJob?.cancel()
         recoveryWatchdogJob?.cancel()
+        pokeEscalationJob?.cancel()
         screenStateReceiver?.let { unregisterReceiver(it) }
         networkCallback?.let {
             connectivityManager?.unregisterNetworkCallback(it)
