@@ -1,0 +1,3 @@
+# Шелл-скрипты всегда с LF-переносами: CRLF ломает bash на серверах и в CI,
+# а autocrlf на Windows молча конвертирует их при checkout (см. deploy.sh в assets).
+*.sh text eol=lf

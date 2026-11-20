@@ -1342,6 +1342,10 @@ private suspend fun performDeploy(
         val serverFile = File(context.cacheDir, "server")
         try {
             context.assets.open("deploy.sh").use { inp -> FileOutputStream(scriptFile).use { out -> inp.copyTo(out) } }
+            // Вырезаем виндовые переносы (CR) из скрипта: bash на сервере падает
+            // с «$'\r': command not found», если assets/deploy.sh попал в APK
+            // в CRLF-формате (сборка на Windows с autocrlf=true конвертирует assets).
+            scriptFile.writeBytes(scriptFile.readBytes().filterNot { it == 13.toByte() }.toByteArray())
             context.assets.open("server").use { inp -> FileOutputStream(serverFile).use { out -> inp.copyTo(out) } }
             FileOutputStream(adminTokenFile).use { it.write(adminApiToken.toByteArray(Charsets.UTF_8)) }
             FileOutputStream(mainPasswordFile).use { it.write(mainPass.toByteArray(Charsets.UTF_8)) }
