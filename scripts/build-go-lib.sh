@@ -65,6 +65,19 @@ if [[ -z "$NDK_DIR" ]]; then
   exit 1
 fi
 
+# cgo режет значение CC по пробелам: путь к NDK вида
+# `C:\Users\Имя Фамилия\...` ломает сборку невнятной ошибкой
+# «cgo: C compiler "C:/Users/Имя" not found». Обходится снаружи: junction
+# без пробелов + ANDROID_NDK_HOME. (Создавать junction из этого скрипта
+# бесполезно: MSYS-конвертация аргументов cmd из bash портит reparse-данные —
+# junction появляется, но не резолвится.)
+if [[ -n "${NDK_DIR//[! ]/}" ]]; then
+  echo "NDK path contains spaces, cgo cannot use it: $NDK_DIR" >&2
+  echo "Create a junction without spaces (from cmd/PowerShell, not from bash):" >&2
+  echo '  mklink /J E:\ndk-nospace "<path-to-ndk>"  and set ANDROID_NDK_HOME=E:\ndk-nospace' >&2
+  exit 1
+fi
+
 # Host tag: NDK устанавливается по платформе хоста (linux-x86_64 / windows-x86_64 / darwin-x86_64).
 HOST_TAG="linux-x86_64"
 for tag in linux-x86_64 windows-x86_64 darwin-x86_64; do
