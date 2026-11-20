@@ -153,14 +153,13 @@ func TestRawMassDropIsolatedByIP(t *testing.T) {
 		t.Fatalf("IP B: ожидалось 4 воркера, получено %d", len(csB.workers))
 	}
 
+	// лок уже удержан defer-ом с начала функции — внутренний Lock здесь само-дедлок.
 	for _, ip := range []string{ipA, ipB} {
-		r.mu.Lock()
 		cs := r.sessions[ip]
 		var list []*downlinkWorker
 		if cs != nil {
 			list = append([]*downlinkWorker(nil), cs.workers...)
 		}
-		r.mu.Unlock()
 		for _, w := range list {
 			w.stop()
 		}
