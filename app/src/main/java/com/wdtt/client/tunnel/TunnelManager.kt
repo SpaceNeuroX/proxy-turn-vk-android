@@ -1703,13 +1703,12 @@ object TunnelManager {
         if (proc.isAlive) {
             // Последний рубеж: SIGKILL по PID. Process.pid() доступен с API 34;
             // на более ранних версиях надеемся на само-завершение go_client
-            // по сторожевому таймеру из Task 1.
+            // по сторожевому таймеру после STOP (armShutdownWatchdog).
             if (android.os.Build.VERSION.SDK_INT >= 34) {
                 runCatching {
                     // Kotlin в этом проекте не видит Process.pid()/toHandle() на этапе
                     // компиляции, хотя метод есть в android.jar начиная с API 34;
                     // обращаемся через reflection, чтобы не менять build-конфигурацию.
-                    @Suppress("UNCHECKED_CAST")
                     val pid = (Process::class.java.getMethod("pid").invoke(proc) as Number).toInt()
                     android.system.Os.kill(pid, android.system.OsConstants.SIGKILL)
                 }.onFailure { e ->

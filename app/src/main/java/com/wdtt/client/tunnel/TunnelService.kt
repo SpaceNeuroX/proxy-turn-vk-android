@@ -414,6 +414,7 @@ class TunnelService : Service() {
                         delay(2_000)
                         if (!wantedTunnelRunning || !TunnelManager.running.value) return@launch
                         if (trackedNetworks().isNotEmpty()) return@launch
+                        pokeEscalationJob?.cancel()
                         isTunnelPaused = true
                         recoveringFromNetworkLoss = true
                         TunnelManager.addNetworkLog("[СЕТЬ] Сеть потеряна (2с без сетей) — приостанавливаем туннель")
@@ -658,7 +659,14 @@ class TunnelService : Service() {
                 pokeEscalationJob?.cancel()
                 pokeEscalationJob = TunnelManager.scope.launch {
                     delay(12_000)
+                    // Те же защитные проверки, что и в стороже: не эскалировать,
+                    // если туннель на паузе, идёт подключение/переподключение или
+                    // активна капча — зеркалируем гард-сет watchdog'а.
                     if (wantedTunnelRunning &&
+                        !isTunnelPaused &&
+                        !TunnelManager.isConnecting.value &&
+                        !TunnelManager.isReconnecting.value &&
+                        !ManlCaptchaWebViewManager.isCaptchaPending &&
                         isUsableUnderlyingNetwork() &&
                         !TunnelManager.hasRecentTransportActivity(12_000L)
                     ) {

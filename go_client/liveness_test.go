@@ -236,6 +236,8 @@ func TestPlannerNetworkPoke(t *testing.T) {
 	}
 
 	// Мёртвый поток снимается быстро после пинка: окно livenessWakeWindow + тик.
+	// Сброс глобального счётчика, чтобы свежий планер не проснулся от чужого поколения.
+	networkPokeGen.Store(0)
 	s2 := newSim(t)
 	s2.run(10*time.Second, false, true)
 	s2.run(10*time.Second, false, false)
