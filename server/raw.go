@@ -35,6 +35,14 @@ import (
 // распределение по воркерам нужно делать явно.
 const downlinkMaxDwellMS = 15
 
+// massReRegisterWindowMs — окно, в течение которого несколько регистраций
+// одного устройства считаются волной перерегистрации (смена сети/рестарт).
+const massReRegisterWindowMs = 10_000
+
+// massReRegisterThreshold — минимальное число "свежих" воркеров за окно,
+// при котором считаем, что клиент полностью перезапустил набор воркеров.
+const massReRegisterThreshold = 9
+
 // downlinkChunkSizeFor зеркалит chunkSizeFor из go_client/dispatcher.go —
 // это отдельный Go-модуль (собственный go.mod), общий код не переиспользуется,
 // но пороги должны совпадать с клиентскими для симметричного поведения.
@@ -66,18 +74,21 @@ const downlinkWorkerBuf = 256
 // а фактическую запись в каждый conn делает своя горутина — так запись в N
 // relay идёт параллельно, и медленный конкретный relay не блокирует остальные.
 type downlinkWorker struct {
-	conn     net.Conn
-	deviceID string
-	sendCh   chan []byte
-	done     chan struct{}
+	conn      net.Conn
+	deviceID  string
+	sendCh    chan []byte
+	done      chan struct{}
+	createdAt int64     // UnixMilli момента регистрации
+	stopOnce  sync.Once // stop() вызывается и из mass-drop, и из unregister
 }
 
 func newDownlinkWorker(conn net.Conn, deviceID string) *downlinkWorker {
 	w := &downlinkWorker{
-		conn:     conn,
-		deviceID: deviceID,
-		sendCh:   make(chan []byte, downlinkWorkerBuf),
-		done:     make(chan struct{}),
+		conn:      conn,
+		deviceID:  deviceID,
+		sendCh:    make(chan []byte, downlinkWorkerBuf),
+		done:      make(chan struct{}),
+		createdAt: time.Now().UnixMilli(),
 	}
 	go w.run()
 	return w
@@ -109,8 +120,10 @@ func (w *downlinkWorker) enqueue(pkt []byte) bool {
 }
 
 func (w *downlinkWorker) stop() {
-	close(w.sendCh)
-	<-w.done
+	w.stopOnce.Do(func() {
+		close(w.sendCh)
+		<-w.done
+	})
 }
 
 type rawClientSessions struct {
@@ -273,7 +286,44 @@ func (r *rawRouter) register(ip string, conn net.Conn, deviceID string) *downlin
 		r.sessions[ip] = cs
 	}
 	cs.workers = append(cs.workers, w)
+
+	// Волна регистраций одного устройства за короткое окно возможна только при
+	// полном перезапуске набора воркеров (смена сети / рестарт процесса): клиент
+	// шлёт GETCONF_RAW ровно один раз на процесс, все остальные — AUTH-волны.
+	// Значит, все старые сессии этого устройства уже мёртвы и продолжают лишь
+	// отравлять downlink-ротацию до 90-секундной уборки. Убираем их сразу.
+	var oldWorkers []*downlinkWorker
+	now := time.Now().UnixMilli()
+	threshold := now - massReRegisterWindowMs
+	freshCount := 0
+	for _, existing := range cs.workers {
+		if existing.createdAt >= threshold {
+			freshCount++
+		}
+	}
+	if freshCount >= massReRegisterThreshold {
+		var kept []*downlinkWorker
+		for _, existing := range cs.workers {
+			if existing.createdAt < threshold {
+				oldWorkers = append(oldWorkers, existing)
+			} else {
+				kept = append(kept, existing)
+			}
+		}
+		if len(oldWorkers) > 0 {
+			cs.workers = kept
+			cs.rrIndex = 0
+			cs.rrCount = 0
+			cs.chunkStartTs = 0
+		}
+	}
 	r.mu.Unlock()
+
+	// stop() вне r.mu — ждём завершения writer-горутин удалённых воркеров,
+	// не держим лок роутера на время этой ожидания.
+	for _, old := range oldWorkers {
+		old.stop()
+	}
 	return w
 }
 
