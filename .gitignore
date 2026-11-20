@@ -28,6 +28,9 @@ app/src/main/assets/server
 # ===== Keystore / Secrets =====
 *.keystore
 *.jks
+
+# ===== Worktrees =====
+.worktrees/
 *.key
 *.pem
 
