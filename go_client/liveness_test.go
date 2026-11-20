@@ -187,3 +187,38 @@ func TestLivenessGraceNeverShortensWindow(t *testing.T) {
 		t.Fatalf("grace moved a fresh lastRx backwards: %d", got)
 	}
 }
+
+func TestPlannerNetworkPoke(t *testing.T) {
+	s := newSim(t)
+	s.run(10*time.Second, false, true)
+
+	// Пинок от Kotlin при смене сети: проверяем все потоки сразу,
+	// мёртвые снимаются за livenessWakeWindow.
+	networkPoke.Store(true)
+
+	// Первый тик после пинка — пробуждение и немедленный keepalive.
+	s.now = s.now.Add(livenessTick)
+	st := s.p.step(s.now, false)
+	if !st.woke {
+		t.Fatal("network poke must wake planner")
+	}
+	if !st.sendKeepalive {
+		t.Fatal("network poke must send keepalive immediately")
+	}
+
+	// Флаг потреблён однократно: второй тик без нового пинка не keepalive.
+	s.now = s.now.Add(livenessTick)
+	st = s.p.step(s.now, false)
+	if st.woke {
+		t.Fatal("woke must not be set on the second step without a poke")
+	}
+	if st.sendKeepalive {
+		t.Fatal("network poke is one-shot; second step must not send keepalive prematurely")
+	}
+
+	// Grace даёт окно смерти не длиннее livenessWakeWindow.
+	silent, _ := s.l.silentFor(s.now, livenessTimeout)
+	if silent > livenessTimeout-livenessWakeWindow {
+		t.Fatalf("network poke grace silentFor=%v, want ≤ %v", silent, livenessTimeout-livenessWakeWindow)
+	}
+}

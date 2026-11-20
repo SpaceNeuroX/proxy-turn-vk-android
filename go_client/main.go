@@ -164,6 +164,9 @@ func main() {
 				lowPowerMode.Store(true)
 			case line == "SCREEN_ON":
 				lowPowerMode.Store(false)
+			case line == "NETWORK_CHANGED":
+				// Смена сети: проверяем все потоки сразу, как при включении экрана.
+				networkPoke.Store(true)
 			case line == "STOP":
 				cancel()
 				armShutdownWatchdog()

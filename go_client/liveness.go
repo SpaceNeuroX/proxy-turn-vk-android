@@ -48,6 +48,10 @@ const (
 // lowPowerMode — экран выключен (команды SCREEN_OFF/SCREEN_ON из stdin).
 var lowPowerMode atomic.Bool
 
+// networkPoke — Kotlin прислал NETWORK_CHANGED: проверить живость всех
+// потоков немедленно, мёртвые снимаются за livenessWakeWindow.
+var networkPoke atomic.Bool
+
 // serverAnswersKeepalive — сервер хоть раз ответил на keepalive (любому
 // потоку). Признак общий на весь клиент: один процесс — один сервер. Если
 // держать его в каждом потоке отдельно, поток, переподключившийся прямо
@@ -136,6 +140,12 @@ func (p *livenessPlanner) step(now time.Time, sleeping bool) livenessStep {
 	if froze || screenOn {
 		// Пока процесс стоял или радио спало, ответы прийти не могли —
 		// это не смерть потока. Проверяем сразу и коротко.
+		p.l.grace(now, timeout)
+		p.nextKeepalive = now
+		st.woke = true
+	}
+	if networkPoke.CompareAndSwap(true, false) {
+		// Смена сети: проверяем всех сразу, мёртвые снимаются за livenessWakeWindow.
 		p.l.grace(now, timeout)
 		p.nextKeepalive = now
 		st.woke = true
