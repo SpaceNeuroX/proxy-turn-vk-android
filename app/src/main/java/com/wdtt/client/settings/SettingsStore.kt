@@ -455,8 +455,8 @@ class SettingsStore(context: Context) {
     // ═══ Поведение ═══
     val autoSwitchToLogs: Flow<Boolean> = dataStore.data.map { it[AUTO_SWITCH_TO_LOGS] ?: true }
     val stopOnWifi: Flow<Boolean> = dataStore.data.map { it[STOP_ON_WIFI] ?: false }
-    /** Быстрое переподключение при смене сети: без ожидания стабилизации, сразу стоп-старт. */
-    val fastNetworkReconnect: Flow<Boolean> = dataStore.data.map { it[FAST_NETWORK_RECONNECT] ?: false }
+    /** Быстрое переподключение при смене сети: пинок воркеров без пересоздания VPN, эскалация только при неудаче. По умолчанию включено. */
+    val fastNetworkReconnect: Flow<Boolean> = dataStore.data.map { it[FAST_NETWORK_RECONNECT] ?: true }
     /** Периодический перерезолв доменов обхода. По умолчанию включён. */
     val bypassAutoRefresh: Flow<Boolean> = dataStore.data.map { it[BYPASS_AUTO_REFRESH] ?: true }
     /** Схема этапов подключения на вкладке «Логи». По умолчанию включена. */

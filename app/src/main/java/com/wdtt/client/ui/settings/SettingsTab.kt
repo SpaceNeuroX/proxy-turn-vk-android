@@ -168,7 +168,7 @@ fun SettingsTabContent(
     }
     val autoSwitchToLogs by settingsStore.autoSwitchToLogs.collectAsStateWithLifecycle(initialValue = true)
     val stopOnWifi by settingsStore.stopOnWifi.collectAsStateWithLifecycle(initialValue = false)
-    val fastNetworkReconnect by settingsStore.fastNetworkReconnect.collectAsStateWithLifecycle(initialValue = false)
+    val fastNetworkReconnect by settingsStore.fastNetworkReconnect.collectAsStateWithLifecycle(initialValue = true)
     val bypassAutoRefresh by settingsStore.bypassAutoRefresh.collectAsStateWithLifecycle(initialValue = true)
     val connectionPipelineEnabled by settingsStore.connectionPipelineEnabled.collectAsStateWithLifecycle(initialValue = true)
     val connectionMode by settingsStore.connectionMode.collectAsStateWithLifecycle(
