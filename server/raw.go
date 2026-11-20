@@ -74,10 +74,18 @@ const downlinkWorkerBuf = 256
 // а фактическую запись в каждый conn делает своя горутина — так запись в N
 // relay идёт параллельно, и медленный конкретный relay не блокирует остальные.
 type downlinkWorker struct {
-	conn      net.Conn
-	deviceID  string
-	sendCh    chan []byte
-	done      chan struct{}
+	conn     net.Conn
+	deviceID string
+	sendCh   chan []byte
+	done     chan struct{}
+
+	// enqueue вызывается из downlinkLoop вне r.mu (после pickDownlinkConn),
+	// а stop() может закрывать sendCh параллельно (mass-drop/unregister).
+	// Без лока воркера отправка в закрытый канал паникует и роняет
+	// downlinkLoop всего сервера.
+	mu     sync.Mutex
+	closed bool
+
 	createdAt int64     // UnixMilli момента регистрации
 	stopOnce  sync.Once // stop() вызывается и из mass-drop, и из unregister
 }
@@ -110,6 +118,12 @@ func (w *downlinkWorker) run() {
 // записи, отставший relay не должен задерживать остальных или копить
 // неограниченную очередь просроченных данных.
 func (w *downlinkWorker) enqueue(pkt []byte) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		putBuf2048(pkt)
+		return false
+	}
 	select {
 	case w.sendCh <- pkt:
 		return true
@@ -121,7 +135,12 @@ func (w *downlinkWorker) enqueue(pkt []byte) bool {
 
 func (w *downlinkWorker) stop() {
 	w.stopOnce.Do(func() {
-		close(w.sendCh)
+		w.mu.Lock()
+		if !w.closed {
+			w.closed = true
+			close(w.sendCh)
+		}
+		w.mu.Unlock()
 		<-w.done
 	})
 }

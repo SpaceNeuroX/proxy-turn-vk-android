@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,8 +14,7 @@ import (
 type fakeConn struct{}
 
 func (c *fakeConn) Read(b []byte) (int, error) {
-	// Воркер не читает из коннекта — Read не используется в тестах.
-	select {}
+	panic("fakeConn: Read не используется в этих тестах")
 }
 
 func (c *fakeConn) Write(b []byte) (int, error) { return len(b), nil }
@@ -46,11 +46,11 @@ func TestRawRegisterSingleDoesNotDropOld(t *testing.T) {
 	workers = append(workers, r.register(ip, &fakeConn{}, "dev"))
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	cs := r.sessions[ip]
 	if cs == nil || len(cs.workers) != 4 {
 		t.Fatalf("ожидалось 4 воркера, получено %d", len(cs.workers))
 	}
-	r.mu.Unlock()
 
 	for _, w := range workers {
 		w.stop()
@@ -74,6 +74,7 @@ func TestRawMassReRegistrationDropsOld(t *testing.T) {
 	threshold := time.Now().UnixMilli() - massReRegisterWindowMs
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	cs := r.sessions[ip]
 	if len(cs.workers) != 9 {
 		t.Fatalf("ожидалось 9 воркеров после волны, получено %d", len(cs.workers))
@@ -92,7 +93,6 @@ func TestRawMassReRegistrationDropsOld(t *testing.T) {
 			t.Fatalf("остался воркер старше окна: createdAt=%d", w.createdAt)
 		}
 	}
-	r.mu.Unlock()
 
 	for _, w := range newWorkers {
 		w.stop()
@@ -110,11 +110,11 @@ func TestRawCleanRampKeepsAll(t *testing.T) {
 	}
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	cs := r.sessions[ip]
 	if len(cs.workers) != 20 {
 		t.Fatalf("ожидалось 20 воркеров, получено %d", len(cs.workers))
 	}
-	r.mu.Unlock()
 
 	for _, w := range workers {
 		w.stop()
@@ -143,6 +143,7 @@ func TestRawMassDropIsolatedByIP(t *testing.T) {
 	r.register(ipB, &fakeConn{}, "devB")
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	csA := r.sessions[ipA]
 	csB := r.sessions[ipB]
 	if len(csA.workers) != 9 {
@@ -151,7 +152,6 @@ func TestRawMassDropIsolatedByIP(t *testing.T) {
 	if len(csB.workers) != 4 {
 		t.Fatalf("IP B: ожидалось 4 воркера, получено %d", len(csB.workers))
 	}
-	r.mu.Unlock()
 
 	for _, ip := range []string{ipA, ipB} {
 		r.mu.Lock()
@@ -173,5 +173,55 @@ func TestRawMassDropIsolatedByIP(t *testing.T) {
 func TestRawDownlinkWorkerStopIdempotent(t *testing.T) {
 	w := newDownlinkWorker(&fakeConn{}, "dev")
 	w.stop()
+	select {
+	case <-w.done:
+	default:
+		t.Fatal("stop() должен дожидаться завершения run()")
+	}
 	w.stop()
+}
+
+// TestRawDownlinkEnqueueAfterStopNoPanic проверяет, что enqueue после stop()
+// не паникует на закрытом канале (защищено per-worker мьютексом).
+func TestRawDownlinkEnqueueAfterStopNoPanic(t *testing.T) {
+	w := newDownlinkWorker(&fakeConn{}, "dev")
+	pkt1 := getBuf2048()[:10]
+	if !w.enqueue(pkt1) {
+		t.Fatal("первая enqueue до stop должна вернуть true")
+	}
+	w.stop()
+
+	pkt2 := getBuf2048()[:10]
+	if w.enqueue(pkt2) {
+		t.Fatal("enqueue после stop должна вернуть false")
+	}
+
+	w2 := newDownlinkWorker(&fakeConn{}, "dev2")
+	stopCh := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic в горутине enqueue: %v", r)
+				}
+			}()
+			for {
+				select {
+				case <-stopCh:
+					return
+				default:
+					pkt := getBuf2048()[:10]
+					w2.enqueue(pkt)
+				}
+			}
+		}()
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	close(stopCh)
+	w2.stop()
+	wg.Wait()
 }
