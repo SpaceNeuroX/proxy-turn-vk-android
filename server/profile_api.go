@@ -219,6 +219,9 @@ func handleAPIProfileStatus(w http.ResponseWriter, r *http.Request) {
 		"active_devices":   activeCount,
 		"is_current_bound": isCurrentBound,
 		"expires_at":       entry.ExpiresAt,
+		// Возможности сервера для клиента; старые клиенты поле не читают.
+		// raw_gen — снимает потоки прошлого запуска по поколению (raw.go).
+		"features": []string{"raw_gen"},
 	}
 
 	w.Header().Set("Content-Type", "application/json")

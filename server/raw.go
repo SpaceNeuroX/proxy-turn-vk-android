@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,17 +71,31 @@ type downlinkWorker struct {
 	deviceID string
 	sendCh   chan []byte
 	done     chan struct{}
+	// gen — поколение подключения клиента (см. parseRawHello), 0 — клиент
+	// его не передал. kicked — поток снят новым поколением того же
+	// устройства (см. rawRouter.register): handleConnRaw завершается.
+	gen    int64
+	kicked atomic.Bool
 }
 
-func newDownlinkWorker(conn net.Conn, deviceID string) *downlinkWorker {
+func newDownlinkWorker(conn net.Conn, deviceID string, gen int64) *downlinkWorker {
 	w := &downlinkWorker{
 		conn:     conn,
 		deviceID: deviceID,
 		sendCh:   make(chan []byte, downlinkWorkerBuf),
 		done:     make(chan struct{}),
+		gen:      gen,
 	}
 	go w.run()
 	return w
+}
+
+// kick снимает поток, вытесненный новым поколением: будит его чтение в
+// handleConnRaw, которое видит kicked и завершает сессию (её defer
+// unregister освобождает writer-горутину как обычно).
+func (w *downlinkWorker) kick() {
+	w.kicked.Store(true)
+	_ = w.conn.SetReadDeadline(time.Now())
 }
 
 func (w *downlinkWorker) run() {
@@ -264,16 +279,44 @@ func (r *rawRouter) pickDownlinkConn(dst string, pktSize int) *downlinkWorker {
 	return w
 }
 
-func (r *rawRouter) register(ip string, conn net.Conn, deviceID string) *downlinkWorker {
-	w := newDownlinkWorker(conn, deviceID)
+// register добавляет поток в даунлинк устройства. Поток нового поколения
+// (gen больше, чем у уже зарегистрированных) снимает потоки старых поколений
+// того же устройства: после смены сети клиент переподключает все потоки,
+// а старые сервер иначе продолжал бы кормить даунлинком до idleTimeout —
+// relay VK принимает запись и в мёртвую аллокацию, ошибки нет. gen == 0
+// (клиент без поколений) никого не снимает и снятым не бывает.
+func (r *rawRouter) register(ip string, conn net.Conn, deviceID string, gen int64) *downlinkWorker {
+	w := newDownlinkWorker(conn, deviceID, gen)
+	var stale []*downlinkWorker
 	r.mu.Lock()
 	cs := r.sessions[ip]
 	if cs == nil {
 		cs = &rawClientSessions{}
 		r.sessions[ip] = cs
 	}
+	if gen > 0 {
+		kept := cs.workers[:0]
+		for _, existing := range cs.workers {
+			if existing.gen > 0 && existing.gen < gen {
+				stale = append(stale, existing)
+				continue
+			}
+			kept = append(kept, existing)
+		}
+		cs.workers = kept
+		if len(stale) > 0 {
+			cs.rrIndex = 0
+			cs.rrCount = 0
+		}
+	}
 	cs.workers = append(cs.workers, w)
 	r.mu.Unlock()
+	for _, old := range stale {
+		old.kick()
+	}
+	if len(stale) > 0 {
+		log.Printf("[RAW] %s: новое поколение подключения, сняты старые потоки: %d", deviceID, len(stale))
+	}
 	return w
 }
 
@@ -306,6 +349,37 @@ func (r *rawRouter) writeUplink(pkt []byte) error {
 	return err
 }
 
+// rawGenField — именованное поле поколения в AUTH/GETCONF_RAW. Именованное, а
+// не позиционное: в других серверах протокола третье поле уже занято
+// (например, MTU), а поле с именем не спутать ни с чем.
+const rawGenField = "gen="
+
+// parseRawHello разбирает поля первого пакета потока после префикса
+// (GETCONF_RAW: или AUTH:) — "deviceID|password[|gen=<мс>]". gen — поколение
+// подключения клиента (время его начала в мс): клиент меняет его при каждой
+// смене сети. Без поля или с некорректным значением gen = 0, как у старых
+// клиентов. Старые серверы поля после пароля не читают.
+func parseRawHello(fields string) (deviceID, password string, gen int64) {
+	parts := strings.Split(strings.TrimSpace(fields), "|")
+	deviceID = "unknown"
+	if len(parts) > 0 {
+		deviceID = parts[0]
+	}
+	if len(parts) > 1 {
+		password = parts[1]
+	}
+	for _, p := range parts[min(len(parts), 2):] {
+		p = strings.TrimSpace(p)
+		if !strings.HasPrefix(p, rawGenField) {
+			continue
+		}
+		if v, err := strconv.ParseInt(strings.TrimPrefix(p, rawGenField), 10, 64); err == nil && v > 0 {
+			gen = v
+		}
+	}
+	return deviceID, password, gen
+}
+
 // handleConnRaw обслуживает клиента в raw-IP режиме: сначала GETCONF_RAW
 // (пароль + deviceID), выдаём IP/DNS/MTU, дальше просто перекачиваем сырые
 // IP-пакеты между activeConn и общим TUN-роутером. Никакого WireGuard.
@@ -334,19 +408,12 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 	if !isGetConf && !isAuth {
 		return
 	}
-	var parts []string
+	var deviceID, password string
+	var gen int64
 	if isGetConf {
-		parts = strings.Split(strings.TrimSpace(strings.TrimPrefix(first, "GETCONF_RAW:")), "|")
+		deviceID, password, gen = parseRawHello(strings.TrimPrefix(first, "GETCONF_RAW:"))
 	} else {
-		parts = strings.Split(strings.TrimSpace(strings.TrimPrefix(first, "AUTH:")), "|")
-	}
-	deviceID := "unknown"
-	password := ""
-	if len(parts) > 0 {
-		deviceID = parts[0]
-	}
-	if len(parts) > 1 {
-		password = parts[1]
+		deviceID, password, gen = parseRawHello(strings.TrimPrefix(first, "AUTH:"))
 	}
 	if !connectionCredentialMatches(clientConn, password) {
 		clientConn.Write([]byte("DENIED:wrong_password"))
@@ -459,7 +526,7 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 	untrackCredential := trackCredentialConnection(password, deviceID, clientConn)
 	defer untrackCredential()
 
-	dlWorker := router.register(assignedIP, clientConn, deviceID)
+	dlWorker := router.register(assignedIP, clientConn, deviceID, gen)
 	defer router.unregister(assignedIP, dlWorker)
 	log.Printf("[RAW] Сессия %s зарегистрирована (ip=%s, getConf=%v)", deviceID, assignedIP, isGetConf)
 	defer log.Printf("[RAW] Сессия %s (ip=%s) завершена", deviceID, assignedIP)
@@ -494,11 +561,14 @@ func handleConnRaw(ctx context.Context, clientConn net.Conn, router *rawRouter) 
 			return
 		default:
 		}
+		if dlWorker.kicked.Load() {
+			return
+		}
 		clientConn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		nn, err := clientConn.Read(*b)
 		if err != nil {
 			if isNetTimeout(err) {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || dlWorker.kicked.Load() {
 					return
 				}
 				if time.Since(lastActivity) > idleTimeout {

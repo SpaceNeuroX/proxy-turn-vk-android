@@ -418,7 +418,7 @@ func RunSession(
 
 	// Запрос конфига
 	if getConfig && configCh != nil && tp.RawMode {
-		ip, dnsCSV, mtu, confErr := RequestRawConfig(activeConn, deviceID, password)
+		ip, dnsCSV, mtu, confErr := RequestRawConfig(activeConn, deviceID, password, connGeneration)
 		if confErr != nil {
 			errStr := confErr.Error()
 			if strings.Contains(errStr, "FATAL_AUTH") {
@@ -459,7 +459,13 @@ func RunSession(
 			log.Printf("[ВОРКЕР #%d] Сервер ещё не выдал WireGuard-конфиг, повторим позже", sessionID)
 		}
 	} else {
-		if authErr := SendAuth(activeConn, deviceID, password); authErr != nil {
+		// Поколение — только в raw-режиме: даунлинк по потокам раздаёт
+		// серверный rawRouter; WG-путь сервера его не использует.
+		var gen int64
+		if tp.RawMode {
+			gen = connGeneration
+		}
+		if authErr := SendAuth(activeConn, deviceID, password, gen); authErr != nil {
 			log.Printf("[ВОРКЕР #%d] Ошибка авторизации: %v", sessionID, authErr)
 		}
 	}
