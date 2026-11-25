@@ -47,9 +47,27 @@ func RequestConfig(conn net.Conn, localPort, deviceID, password string) (string,
 	return resp, nil
 }
 
-// SendAuth отправляет команду авторизации, чтобы сервер мог связать соединение с устройством
-func SendAuth(conn net.Conn, deviceID, password string) error {
-	payload := fmt.Sprintf("AUTH:%s|%s", deviceID, password)
+// connGeneration — поколение подключения: время запуска клиента в мс. При
+// смене сети приложение перезапускает клиент, поколение растёт, и сервер
+// с поддержкой поколений сразу снимает потоки прошлого запуска того же
+// устройства, а не кормит их даунлинком до своего таймаута простоя (см.
+// server/raw.go, rawRouter.register). Старые серверы третье поле не читают.
+var connGeneration = time.Now().UnixMilli()
+
+// helloFields — поля после префикса AUTH:/GETCONF_RAW: в raw-режиме.
+// Поколение — именованным полем gen=: в других серверах протокола третье
+// поле занято (например, MTU), именованное они просто не узнают.
+func helloFields(deviceID, password string, gen int64) string {
+	if gen > 0 {
+		return fmt.Sprintf("%s|%s|gen=%d", deviceID, password, gen)
+	}
+	return fmt.Sprintf("%s|%s", deviceID, password)
+}
+
+// SendAuth отправляет команду авторизации, чтобы сервер мог связать соединение с устройством.
+// gen > 0 — поколение подключения (только raw-режим, см. connGeneration).
+func SendAuth(conn net.Conn, deviceID, password string, gen int64) error {
+	payload := "AUTH:" + helloFields(deviceID, password, gen)
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		return fmt.Errorf("отправка AUTH: %w", err)
 	}
@@ -60,8 +78,8 @@ func SendAuth(conn net.Conn, deviceID, password string) error {
 // RequestRawConfig запрашивает у сервера конфигурацию для raw-IP режима
 // (без WireGuard) — сервер отвечает "RAWCONF:ip|dns|mtu" (см. server/raw.go
 // handleConnRaw). ip пусто на первый вызов, если сервер ещё не назначил его.
-func RequestRawConfig(conn net.Conn, deviceID, password string) (ip, dnsCSV string, mtu int, err error) {
-	payload := fmt.Sprintf("GETCONF_RAW:%s|%s", deviceID, password)
+func RequestRawConfig(conn net.Conn, deviceID, password string, gen int64) (ip, dnsCSV string, mtu int, err error) {
+	payload := "GETCONF_RAW:" + helloFields(deviceID, password, gen)
 	if _, err = conn.Write([]byte(payload)); err != nil {
 		return "", "", 0, fmt.Errorf("отправка GETCONF_RAW: %w", err)
 	}
